@@ -6,10 +6,11 @@
    ========================================================= */
 
 const CONFIG = {
-  versie: '2.4.0',
+  versie: '2.4.1',
 
   // Beginwaarden (aan te passen in de app onder Instellingen)
   standaard: {
+    overlapStuk: 0,     // mm, overlap bij een gordijn als stuk
     overlap: 50,        // mm, opgeteld bij railbreedte (gordijnen) – Excel rekent rails = breedte − 50
     vloerafstand: 10,   // mm, gordijn net boven de grond: kortste hoogte − dit
     opGrond: 50,        // mm, gordijn op de grond: langste hoogte + dit

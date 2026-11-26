@@ -118,6 +118,7 @@ function parseMaat(s) {
 const metingen = arr => (arr || []).map(parseMaat).filter(n => n > 0);
 
 function stdWaarde(p, key) {
+  if (key === 'overlap' && p.gord && p.gord.indeling === 'stuk') return Number(DB.inst.waarden.overlapStuk) || 0;
   if (key === 'aftrekB' || key === 'aftrekH') {
     const d = key === 'aftrekB' ? 'B' : 'H';
     const tru = gekozenOpties(p).some(o => /trufit/i.test(o));
@@ -924,7 +925,7 @@ function renderInst() {
       <h2>Standaardwaarden</h2>
       <p class="uitleg">Gelden voor alle producten, tenzij per product afwijkend ingevuld. Alle maten in mm.</p>
       <div class="raster2">
-        ${[['overlap', 'Overlap gordijn'], ['vloerafstand', 'Gordijn net boven de grond (−)'], ['opGrond', 'Gordijn op de grond (+)'], ['vensterbank', 'Gordijn tot vensterbank (−)'], ['vitrageExtra', 'Extra vitrage tweede laag (−)'], ['aftrekB', 'Aftrek breedte in de dag'], ['aftrekH', 'Aftrek hoogte in de dag'], ['overmaatB', 'Overmaat breedte op de dag'], ['overmaatH', 'Overmaat hoogte op de dag']].map(([k, l]) => `<label class="veld"><span>${l}</span><input data-ibind="waarden.${k}" data-num value="${esc(w[k])}" inputmode="decimal"></label>`).join('')}
+        ${[['overlap', 'Overlap gordijn (stel)'], ['overlapStuk', 'Overlap gordijn (stuk)'], ['vloerafstand', 'Gordijn net boven de grond (−)'], ['opGrond', 'Gordijn op de grond (+)'], ['vensterbank', 'Gordijn tot vensterbank (−)'], ['vitrageExtra', 'Extra vitrage tweede laag (−)'], ['aftrekB', 'Aftrek breedte in de dag'], ['aftrekH', 'Aftrek hoogte in de dag'], ['overmaatB', 'Overmaat breedte op de dag'], ['overmaatH', 'Overmaat hoogte op de dag']].map(([k, l]) => `<label class="veld"><span>${l}</span><input data-ibind="waarden.${k}" data-num value="${esc(w[k])}" inputmode="decimal"></label>`).join('')}
       </div>
     </section>
     <section class="kaart">
