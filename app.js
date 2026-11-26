@@ -65,6 +65,12 @@ function kleurInfo(p) {
   const k = (CAT.kleuren[a.fam] || {})[nr];
   return k ? { nr, kwaliteit: k[0], pk: k[1], plisse: k[2] } : { nr, fout: true };
 }
+function maxTabel(p) {
+  const a = artDef(p); if (!a || !a.mp || !CAT.max) return null;
+  const m = CAT.max[a.mp]; if (!m) return null;
+  const pk = effPk(p);
+  return m['*'] || m[pk] || null;
+}
 const optieLijst = p => { const a = artDef(p); return a && a.og ? (CAT.opties[a.og] || []) : []; };
 const gekozenOpties = p => (p.opties || []).filter(Boolean);
 const effPk = p => { if (p.pk) return p.pk; const k = kleurInfo(p); return k && !k.fout ? k.pk : ''; };
@@ -117,6 +123,7 @@ function bereken(p) {
   }
   const pk = effPk(p);
   if (pk && t.art.pk && !t.art.pk.split(',').map(s => s.trim()).includes(pk)) r.waarsch.push(`${pk} is niet leverbaar voor ${t.naam} (wel: ${t.art.pk}).`);
+  if (p.overgenomen) r.waarsch.push(`Overgenomen van ${p.overgenomen} – nog niet bevestigd.`);
   if (t.art.let && t.modus === 'zon') r.info2 = t.art.let;
   if (t.calc === 'los') return r;
 
@@ -150,6 +157,13 @@ function bereken(p) {
     m.forEach(v => { if (v < 200) r.waarsch.push(`${naam} ${v} mm is erg klein. Is dit in cm gemeten?`); if (v > 8000) r.waarsch.push(`${naam} ${v} mm is erg groot. Klopt dit?`); });
     if (m.length > 1 && Math.max(...m) - Math.min(...m) > 5) r.waarsch.push(`${naam}: metingen verschillen ${Math.max(...m) - Math.min(...m)} mm – scheef kozijn, controleren. Kleinste maat gebruikt.`);
   });
+  const tab = t.calc === 'zon' ? maxTabel(p) : null;
+  if (tab && r.B != null && r.H != null) {
+    const maxH = tab[tab.length - 1][0], maxB = Math.max(...tab.map(x => x[1]));
+    const stap = tab.find(x => x[0] >= r.H);
+    if (!stap) r.waarsch.push(`Te hoog: ${t.naam} kan tot ${maxH} mm hoog (bestelmaat ${r.H}).`);
+    else if (r.B > stap[1]) r.waarsch.push(stap[1] < maxB ? `Te breed bij deze hoogte: max ${stap[1]} mm breed bij ${r.H} mm hoog (bestelmaat ${r.B}).` : `Te breed: ${t.naam} kan tot ${stap[1]} mm breed (bestelmaat ${r.B}).`);
+  } else if (tab && t.art.fam && !effPk(p) && r.B != null) r.info3 = 'Maximale maat wordt gecontroleerd zodra het kleurnummer bekend is.';
   if (r.B != null) optieLijst(p).forEach(o => { if (o.max && gekozenOpties(p).includes(o.o) && r.B > o.max) r.waarsch.push(`${o.o} kan tot ${o.max} mm breed (bestelmaat ${r.B}).`); });
   if (t.calc === 'zon' && p.montage === 'in' && (mB.length === 1 || mH.length === 1)) r.info = '1 meting – 3-puntsmeting aanbevolen';
   return r;
@@ -158,7 +172,7 @@ const fmtMaat = r => !r ? '—' : r.t.calc === 'los' ? '' : `${r.B ?? '—'} × 
 const fmtStrak = r => !r ? '—' : r.t.calc === 'los' ? '' : `${r.sB ?? '—'} × ${r.sH ?? '—'}`;
 function kleurTekst(p) {
   const k = kleurInfo(p);
-  if (k && !k.fout) return `${k.nr} ${k.kwaliteit}${k.plisse ? ' (' + k.plisse + ' mm)' : ''}`;
+  if (k && !k.fout) return `${k.nr} ${k.kwaliteit}`;
   return [p.kleurnr, p.kleur].filter(Boolean).join(' ');
 }
 function uitvoeringTekst(p) {
@@ -166,7 +180,8 @@ function uitvoeringTekst(p) {
   if (t.calc === 'stof') {
     const g = p.gord; return [g.stelstuk, g.plooi, g.voering && 'voering ' + g.voering + (g.voeringkleur ? ' ' + g.voeringkleur : ''), g.voering && g.voeren === 'Los' && 'los gevoerd', g.loodkoord === 'Ja' && 'loodkoord', g.instomen === 'Ja' && 'instomen', g.rails !== 'Geen' && g.rails, g.runners, g.bochten && g.bochten + ' bocht(en)'].filter(Boolean).join(' · ');
   }
-  return [...gekozenOpties(p), p.zijde && 'bediening ' + p.zijde.toLowerCase()].filter(Boolean).join(' · ');
+  const kp = kleurInfo(p);
+  return [kp && !kp.fout && kp.plisse && 'plissé ' + kp.plisse + ' mm', ...gekozenOpties(p), p.zijde && 'bediening ' + p.zijde.toLowerCase()].filter(Boolean).join(' · ');
 }
 
 /* ---------- router ---------- */
@@ -179,6 +194,7 @@ function route() {
     huidigeKlant = DB.klanten[h[1]];
     if (h[2] === 'raam') renderRaam(huidigeKlant, h[3]);
     else if (h[2] === 'overzicht') renderOverzicht(huidigeKlant);
+    else if (h[2] === 'afronden') renderAfronden(huidigeKlant);
     else renderKlant(huidigeKlant);
   } else {
     huidigeKlant = null;
@@ -266,7 +282,7 @@ function renderLijst() {
       ${lijst.map(k => `<li data-zoek="${esc((k.naam + ' ' + k.adres + ' ' + k.pcplaats + ' ' + k.offertenr).toLowerCase())}">
         <a href="#/k/${k.id}"><strong>${esc(k.naam || '(geen naam)')}</strong>
         <span>${esc(k.adres)} ${esc(k.pcplaats)}</span>
-        <small>${datumNL(k.datum)}${k.offertenr ? ' · offerte ' + esc(k.offertenr) : ''} · ${k.ruimtes.length} ruimtes · ${telProducten(k)} producten ${k.updated > k.syncedAt ? '· <em class="niet-sync">niet gesynchroniseerd</em>' : ''}</small></a></li>`).join('') || '<li class="leeg">Nog geen metingen.</li>'}
+        <small>${datumNL(k.datum)}${k.offertenr ? ' · offerte ' + esc(k.offertenr) : ''} · ${k.ruimtes.length} ruimtes · ${telProducten(k)} producten · ${statusTekst(k)} ${k.updated > k.syncedAt ? '· <em class="niet-sync">niet gesynchroniseerd</em>' : ''}</small></a></li>`).join('') || '<li class="leeg">Nog geen metingen.</li>'}
     </ul>
     <div class="acties onder">
       <a class="knop" href="#/instellingen">Instellingen</a>
@@ -299,6 +315,7 @@ function renderKlant(k) {
       </div>
       <label class="veld"><span>Opmerking</span><textarea data-bind="opmerking" rows="2">${esc(k.opmerking)}</textarea></label>
     </details>
+    ${montageKaart(k)}
 
     ${k.ruimtes.map((ru, ri) => `
       <section class="kaart ruimte">
@@ -323,7 +340,8 @@ function renderKlant(k) {
     </section>
 
     <div class="acties onder">
-      <a class="knop primair" href="#/k/${k.id}/overzicht">Overzicht &amp; print</a>
+      <a class="knop primair" href="#/k/${k.id}/afronden">Meting afronden</a>
+      <a class="knop" href="#/k/${k.id}/overzicht">Overzicht &amp; print</a>
       <button class="knop" onclick="kopieerExcel()">Kopieer voor Excel</button>
       <button class="knop gevaar" onclick="verwijderKlant()">Meting verwijderen</button>
     </div>
@@ -371,13 +389,114 @@ function maakRaam(ri) {
   const k = huidigeKlant; const ru = k.ruimtes[ri];
   const w = nieuwRaam(ru.ramen.length + 1);
   // handig: vorig product als startpunt (zelfde product/kleur, maten leeg)
-  const vorige = ru.ramen.length ? ru.ramen[ru.ramen.length - 1].producten[0] : null;
+  // vorig raam in deze ruimte, anders het laatste raam uit een eerdere ruimte
+  let vorige = null, bron = '';
+  if (ru.ramen.length) { const w0 = ru.ramen[ru.ramen.length - 1]; vorige = w0.producten[0]; bron = `${ru.naam} raam ${w0.nr}`; }
+  for (let i = ri - 1; !vorige && i >= 0; i--) { const rr = k.ruimtes[i].ramen; if (rr.length) { vorige = rr[rr.length - 1].producten[0]; bron = `${k.ruimtes[i].naam} raam ${rr[rr.length - 1].nr}`; } }
   const p = nieuwProduct();
   if (vorige) Object.assign(p, kopie({ cat: vorige.cat, art: vorige.art, kleurnr: vorige.kleurnr, kleur: vorige.kleur, pk: vorige.pk, opties: vorige.opties, montage: vorige.montage, bevestiging: vorige.bevestiging, zijde: vorige.zijde, gord: vorige.gord || gordStandaard() }));
+  if (vorige && vorige.art) p.overgenomen = bron;
   w.producten.push(p);
   ru.ramen.push(w); gewijzigd(k); location.hash = `#/k/${k.id}/raam/${w.id}`;
 }
 function verwijderKlant() { if (!confirm('Deze hele meting verwijderen?')) return; huidigeKlant.verwijderd = true; gewijzigd(huidigeKlant); location.hash = '#/'; }
+
+/* ---------- Montage-info (voor de plaatsers) ---------- */
+const MONTAGE = [
+  ['verdieping', 'Verdieping', ['Souterrain', 'Begane grond', '1e', '2e', '3e', '4e', '5e of hoger'], false],
+  ['lift', 'Lift', ['Ja', 'Nee'], false],
+  ['trap', 'Trap', ['Normaal', 'Steil / smal'], false],
+  ['parkeren', 'Parkeren', ['Voor de deur', 'Vergunning / kaart nodig', 'Betaald parkeren', 'Eigen terrein', 'Lastig – ver lopen'], false],
+  ['boren', 'Boren toegestaan', ['Ja', 'Nee', 'Navragen VvE / verhuurder'], false],
+  ['stroom', 'Stroom voor motor', ['n.v.t.', 'Aanwezig', 'Nog regelen'], false],
+  ['ladder', 'Ladder / steiger', ['Huishoudtrap', 'Ladder tot 3 m', 'Grote ladder', 'Steiger / hoogwerker'], false]
+];
+const hoogsteMh = k => Math.max(0, ...k.ruimtes.flatMap(r => r.ramen.flatMap(w => w.producten.map(p => parseMaat(p.montagehoogte) || 0))));
+function montageKaart(k) {
+  const m = k.montage || (k.montage = {});
+  const open = MONTAGE.filter(([key, , , verpl]) => verpl && !m[key]).length;
+  const mh = hoogsteMh(k);
+  return `<details class="kaart">
+    <summary>Montage-info voor de plaatsers <small>(optioneel)</small></summary>
+    <div class="raster2">
+      ${MONTAGE.map(([key, label, opties, verpl]) => `<label class="veld"><span>${label}${verpl ? ' <b class="verplicht-ster">*</b>' : ''}</span>${select('montage.' + key, opties, m[key] || '', verpl && !m[key] ? 'class="verplicht"' : '')}</label>`).join('')}
+      <label class="veld"><span>Contact op montagedag</span><input data-bind="montage.contact" value="${esc(m.contact || '')}" placeholder="naam en telefoon"></label>
+      <label class="veld"><span>Toegang / sleutel</span><input data-bind="montage.toegang" value="${esc(m.toegang || '')}" placeholder="bijv. sleutel bij buren, code"></label>
+    </div>
+    ${mh ? `<p class="uitleg">Hoogste montagehoogte in deze meting: <b>${mh} mm</b>${mh > 2800 ? ' – denk aan een grote ladder' : ''}.</p>` : ''}
+    <label class="veld"><span>Bijzonderheden montage</span><textarea data-bind="montage.bijz" rows="2">${esc(m.bijz || '')}</textarea></label>
+  </details>`;
+}
+function montagePrint(k) {
+  const m = k.montage || {}; const mh = hoogsteMh(k);
+  const rijen = MONTAGE.filter(([key]) => m[key]).map(([key, label]) => [label, m[key]]);
+  if (m.contact) rijen.push(['Contact montagedag', m.contact]);
+  if (m.toegang) rijen.push(['Toegang', m.toegang]);
+  if (mh) rijen.push(['Hoogste montagehoogte', mh + ' mm']);
+  if (!rijen.length && !m.bijz) return '';
+  return `<h2>Montage-info</h2><table class="gegevens montage">${rijen.reduce((h, r, i) => h + (i % 2 ? '' : '<tr>') + `<th>${esc(r[0])}</th><td>${esc(r[1])}</td>` + (i % 2 ? '</tr>' : ''), '')}${rijen.length % 2 ? '<th></th><td></td></tr>' : ''}</table>${m.bijz ? `<p>${esc(m.bijz).replace(/\n/g, '<br>')}</p>` : ''}`;
+}
+
+/* ---------- Meting afronden: alles nalopen ---------- */
+function statusTekst(k) {
+  if (!k.afgerond) return '<em class="open">open</em>';
+  return k.updated - k.afgerond > 3000 ? '<em class="niet-sync">gewijzigd na afronden</em>' : `<em class="ok">✓ afgerond ${datumNL(new Date(k.afgerond).toISOString().slice(0, 10))}</em>`;
+}
+function controleer(k) {
+  const fout = [], aandacht = [];
+  const kl = `#/k/${k.id}`;
+  if (!k.naam.trim()) fout.push(['Klantnaam ontbreekt', kl]);
+  if (!k.adres.trim() || !k.pcplaats.trim()) fout.push(['Adres of postcode/plaats ontbreekt', kl]);
+  if (!k.telefoon.trim() && !k.email.trim()) fout.push(['Geen telefoon en geen e-mail', kl]);
+  const m = k.montage || {};
+  if (m.boren === 'Navragen VvE / verhuurder') aandacht.push(['Boren nog navragen bij VvE / verhuurder', kl]);
+  if (m.stroom === 'Nog regelen') aandacht.push(['Stroom voor motor moet nog geregeld worden', kl]);
+  if (!k.ruimtes.length) fout.push(['Nog geen ruimtes', kl]);
+  k.ruimtes.forEach(ru => {
+    const rn = ru.naam || '(ruimte zonder naam)';
+    if (!ru.naam.trim()) fout.push(['Ruimte zonder naam', kl]);
+    if (!ru.ramen.length) aandacht.push([`${rn}: nog geen ramen`, kl]);
+    ru.ramen.forEach(w => {
+      const wl = `${kl}/raam/${w.id}`, wn = `${rn} · raam ${w.nr}`;
+      if (!w.producten.length) fout.push([`${wn}: geen product`, wl]);
+      if (!w.fotos.length) aandacht.push([`${wn}: geen foto`, wl]);
+      w.producten.forEach((p, i) => {
+        const r = bereken(p);
+        if (!r) { fout.push([`${wn}: product ${i + 1} niet compleet`, wl]); return; }
+        if (r.t.calc !== 'los' && (r.B == null || r.H == null)) fout.push([`${wn}: ${r.t.naam} – maten ontbreken`, wl]);
+        r.waarsch.forEach(x => fout.push([`${wn}: ${r.t.naam} – ${x}`, wl]));
+        if (r.info) aandacht.push([`${wn}: ${r.t.naam} – ${r.info}`, wl]);
+        if (r.afwijkend.length) aandacht.push([`${wn}: ${r.t.naam} – afwijkend van standaard (${r.afwijkend.join(', ')})`, wl]);
+      });
+    });
+  });
+  const ex = exportRegels(k), L = CAT.limieten;
+  if (ex.aantalInvoer > L.invoer) fout.push([`${ex.aantalInvoer} productregels – de offerte heeft er ${L.invoer}`, kl]);
+  if (ex.aantalGord > L.gordijnen) fout.push([`${ex.aantalGord} gordijnregels – de offerte heeft er ${L.gordijnen}`, kl]);
+  if (ex.aantalRuimtes > L.ruimtes) fout.push([`${ex.aantalRuimtes} ruimtes – de offerte heeft er ${L.ruimtes}`, kl]);
+  if (!k.offertenr) aandacht.push(['Nog geen offertenummer', kl]);
+  return { fout, aandacht };
+}
+function renderAfronden(k) {
+  const { fout, aandacht } = controleer(k);
+  const item = ([t, href]) => `<li><a href="${href}">${esc(t)}</a></li>`;
+  app().innerHTML = kop('Meting afronden', '#/k/' + k.id) + `
+  <main class="inhoud">
+    ${fout.length ? `<section class="kaart fout-kaart"><h2>Moet nog (${fout.length})</h2><ul class="checklijst">${fout.map(item).join('')}</ul></section>`
+                  : `<section class="kaart ok-kaart"><h2>✓ Alles compleet</h2><p>Geen ontbrekende gegevens gevonden.</p></section>`}
+    ${aandacht.length ? `<section class="kaart let-kaart"><h2>Aandachtspunten (${aandacht.length})</h2><ul class="checklijst">${aandacht.map(item).join('')}</ul></section>` : ''}
+    <div class="acties onder">
+      <button class="knop primair" onclick="rondAf(${fout.length})">${fout.length ? 'Toch afronden' : '✓ Meting afronden'}</button>
+      <a class="knop" href="#/k/${k.id}/overzicht">Overzicht &amp; print</a>
+    </div>
+  </main>`;
+  updateBadge();
+}
+function rondAf(nFout) {
+  if (nFout && !confirm(`Er staan nog ${nFout} punten open. Toch afronden?`)) return;
+  const k = huidigeKlant; k.afgerond = Date.now(); gewijzigd(k); k.afgerond = k.updated; bewaarLokaal();
+  melding('Meting afgerond.'); location.hash = '#/k/' + k.id;
+}
 
 /* ---------- Raam ---------- */
 function zoekRaam(k, wid) {
@@ -436,7 +555,9 @@ function productKaart(p, pre, sleutel, pi) {
       <optgroup label="Overig (arbeid, reparatie, vrije regel)">${overig.map(c => `<option ${c.naam === p.cat ? 'selected' : ''}>${esc(c.naam)}</option>`).join('')}</optgroup></select>`;
   const arts = CAT.artikelen[p.cat] || [];
   const artSel = p.cat ? `<label class="veld"><span>Artikel</span><select data-bind="${pre}.art" data-rerender class="type-select"><option value="">Kies…</option>${arts.map(a => `<option ${a.a === p.art ? 'selected' : ''}>${esc(a.a)}</option>`).join('')}</select></label>` : '';
-  const kop = `<div class="product-kop"><b>Product ${pi + 1}</b>${catSel}</div>${artSel}`;
+  const banner = p.overgenomen ? `<div class="overgenomen">Overgenomen van <b>${esc(p.overgenomen)}</b>. Controleer product, kleur en opties.
+      <div class="acties klein"><button class="mini" onclick="bevestigProduct('${sleutel}')">✓ Klopt</button><button class="mini gevaar" onclick="leegProduct('${sleutel}')">Leeg maken</button></div></div>` : '';
+  const kop = `${banner}<div class="product-kop"><b>Product ${pi + 1}</b>${catSel}</div>${artSel}`;
   if (!t) return `<section class="kaart product" data-prod="${sleutel}">${kop}${p.cat && !p.art ? '' : ''}</section>`;
 
   const a = t.art;
@@ -448,6 +569,7 @@ function productKaart(p, pre, sleutel, pi) {
                : `<label class="veld"><span>Kleur</span><input data-bind="${pre}.kleur" value="${esc(p.kleur)}"></label>`}
       <label class="veld"><span>Prijsklasse ${a.fam ? '<small>(leeg = via kleurnummer)</small>' : ''}</span>${select(pre + '.pk', (a.pk || '').split(',').map(s => s.trim()).filter(Boolean), p.pk, 'data-live', a.fam ? 'automatisch' : '—')}</label>
     </div><div class="kleur-info">${kleurInfoHTML(p)}</div>`;
+
   } else if (t.modus === 'gordijn') {
     blok += `<label class="veld"><span>Kleur(nummer)</span><input data-bind="${pre}.kleur" value="${esc(p.kleur)}"></label>`;
   }
@@ -521,14 +643,14 @@ function kleurInfoHTML(p) {
   const k = kleurInfo(p);
   if (!k) return '';
   if (k.fout) return `<div class="waarschuwing">⚠ Kleurnummer ${esc(k.nr)} niet gevonden bij ${esc(p.art)}</div>`;
-  return `<div class="kleur-ok">${esc(k.kwaliteit)} · <b>${esc(p.pk || k.pk)}</b>${p.pk && p.pk !== k.pk ? ` <span class="tag">handmatig (kleur = ${esc(k.pk)})</span>` : ''}${k.plisse ? ` · plissé ${esc(k.plisse)} mm` : ''}</div>`;
+  return `<div class="kleur-ok">${esc(k.kwaliteit)} · <b>${esc(p.pk || k.pk)}</b>${p.pk && p.pk !== k.pk ? ` <span class="tag">handmatig (kleur = ${esc(k.pk)})</span>` : ''}${k.plisse ? ` · <b class="plisse">plissé ${esc(k.plisse)} mm</b>` : ''}</div>`;
 }
 function resultaatHTML(p) {
   const r = bereken(p);
   if (!r) return '';
   const meldingen = `${r.afwijkend.length ? `<div class="let-op">Afwijkend van standaard: ${esc(r.afwijkend.join(', '))}</div>` : ''}
     ${r.waarsch.map(w => `<div class="waarschuwing">⚠ ${esc(w)}</div>`).join('')}
-    ${r.info ? `<div class="info">${esc(r.info)}</div>` : ''}${r.info2 ? `<div class="info">Let op: ${esc(r.info2)}</div>` : ''}`;
+    ${r.info ? `<div class="info">${esc(r.info)}</div>` : ''}${r.info2 ? `<div class="info">Let op: ${esc(r.info2)}</div>` : ''}${r.info3 ? `<div class="info">${esc(r.info3)}</div>` : ''}`;
   if (r.t.calc === 'los') return meldingen;
   return `<div class="bestel ${r.hand.B || r.hand.H ? 'hand' : ''}">
       <div class="bestel-label">BESTELMAAT <small>mm</small>${r.hand.B || r.hand.H ? ' <span class="tag">handmatig</span>' : ''}</div>
@@ -537,12 +659,15 @@ function resultaatHTML(p) {
     </div>${meldingen}`;
 }
 function prodVan(sleutel) { const [ri, wi, pi] = sleutel.split('.').map(Number); return [huidigeKlant.ruimtes[ri].ramen[wi], pi]; }
+function bevestigProduct(s) { const [w, pi] = prodVan(s); delete w.producten[pi].overgenomen; gewijzigd(huidigeKlant); route(); }
+function leegProduct(s) { if (!confirm('Overgenomen gegevens wissen en dit product leeg maken?')) return; const [w, pi] = prodVan(s); const oud = w.producten[pi]; const n = nieuwProduct(); n.montagehoogte = oud.montagehoogte; n.B = oud.B; n.H = oud.H; w.producten[pi] = n; gewijzigd(huidigeKlant); route(); }
 function maakProduct(ri, wi) { huidigeKlant.ruimtes[ri].ramen[wi].producten.push(nieuwProduct()); gewijzigd(huidigeKlant); route(); }
-function dupliceerProduct(s) { const [w, pi] = prodVan(s); const c = kopie(w.producten[pi]); c.id = uid(); w.producten.splice(pi + 1, 0, c); gewijzigd(huidigeKlant); route(); }
+function dupliceerProduct(s) { const [w, pi] = prodVan(s); const c = kopie(w.producten[pi]); c.id = uid(); c.overgenomen = `product ${pi + 1} van raam ${w.nr}`; w.producten.splice(pi + 1, 0, c); gewijzigd(huidigeKlant); route(); }
 function verwijderProduct(s) { if (!confirm('Product verwijderen?')) return; const [w, pi] = prodVan(s); w.producten.splice(pi, 1); gewijzigd(huidigeKlant); route(); }
 function kopieerRaam(ri, wi) {
   const ru = huidigeKlant.ruimtes[ri]; const c = kopie(ru.ramen[wi]);
-  c.id = uid(); c.nr = String(ru.ramen.length + 1); c.fotos = []; c.producten.forEach(p => p.id = uid());
+  const bronNr = ru.ramen[wi].nr;
+  c.id = uid(); c.nr = String(ru.ramen.length + 1); c.fotos = []; c.producten.forEach(p => { p.id = uid(); if (p.art) p.overgenomen = `${ru.naam} raam ${bronNr}`; p.B = ['', '', '']; p.H = ['', '', '']; p.montagehoogte = ''; p.hand = { B: '', H: '', reden: '' }; });
   ru.ramen.push(c); gewijzigd(huidigeKlant); location.hash = `#/k/${huidigeKlant.id}/raam/${c.id}`;
 }
 function verwijderRaam(ri, wi) { if (!confirm('Dit raam verwijderen?')) return; const k = huidigeKlant; k.ruimtes[ri].ramen.splice(wi, 1); gewijzigd(k); location.hash = '#/k/' + k.id; }
@@ -608,6 +733,7 @@ function renderOverzicht(k) {
     <table class="tabel"><thead><tr><th>Ruimte</th><th>Ramen</th><th>Producten</th><th>Blad</th></tr></thead>
       <tbody>${ruimtes.map((ru, i) => `<tr><td><b>${esc(ru.naam)}</b></td><td>${ru.ramen.length}</td><td>${samenvatting(ru)}</td><td>${i + 2}</td></tr>`).join('')}</tbody></table>
     ${k.opmerking ? `<h2>Opmerking</h2><p>${esc(k.opmerking).replace(/\n/g, '<br>')}</p>` : ''}
+    ${montagePrint(k)}
     <div class="handtekening"><div>Ingemeten door</div><div>Paraaf klant</div></div>
     ${voet}
   </section>`;
@@ -752,7 +878,7 @@ function renderInst() {
 }
 function zorgType(id) { if (!DB.inst.aftrekPerType[id]) DB.inst.aftrekPerType[id] = { B: '', H: '' }; }
 async function testVerbinding() {
-  try { const j = await post({ action: 'test' }); melding('Verbinding werkt: ' + (j.bericht || 'ok')); }
+  try { const j = await post({ action: 'test' }); melding('Verbinding werkt: ' + (j.bericht || 'ok') + '. Metingen worden opgehaald…'); DB.inst.laatstePull = 0; bewaarLokaal(); sync(); }
   catch (e) { melding('Verbinding mislukt: ' + e.message, true); }
 }
 async function haalCatalogus() {
@@ -888,7 +1014,10 @@ async function sync(handmatig) {
 }
 window.addEventListener('online', () => sync());
 window.addEventListener('offline', updateBadge);
-setInterval(() => { if (aantalOpen()) sync(); }, 60000);
+// elke minuut versturen én nieuwe metingen van andere toestellen ophalen
+setInterval(() => sync(), 60000);
+// bij terugkeren naar de app (iPhone: app weer openen, laptop: tabblad weer actief)
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') sync(); });
 
 /* ---------- meldingen ---------- */
 function melding(tekst, fout, ms = 4000) {

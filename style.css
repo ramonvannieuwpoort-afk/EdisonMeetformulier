@@ -219,3 +219,20 @@ input[type=checkbox], input[type=radio] { width: auto; }
 
 .verplicht { border-color: var(--rood) !important; background: #fff6f5; }
 .verplicht-ster { color: var(--rood); }
+
+/* ===== v2.2 ===== */
+.plisse { color: var(--zwart); }
+.ok { color: var(--groen); font-style: normal; }
+.open { color: var(--grijs); }
+.checklijst { margin: 0; padding-left: 18px; }
+.checklijst li { margin: 6px 0; }
+.checklijst a { color: inherit; }
+.fout-kaart { border-left: 4px solid var(--rood); }
+.fout-kaart h2 { color: var(--rood); }
+.let-kaart { border-left: 4px solid var(--oranje); }
+.let-kaart h2 { color: var(--oranje); }
+.ok-kaart { border-left: 4px solid var(--groen); }
+.ok-kaart h2 { color: var(--groen); }
+.gegevens.montage { font-size: 10.5pt; margin-bottom: 4px; }
+.overgenomen { background: #fff6da; border: 1px solid var(--oranje); color: #6b4a00; border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; font-size: 14px; }
+.overgenomen .acties { justify-content: flex-start; }
