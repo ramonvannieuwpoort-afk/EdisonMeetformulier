@@ -48,7 +48,7 @@ const nieuweKlant = () => ({ id: uid(), naam: '', adres: '', pcplaats: '', datum
 const nieuweRuimte = naam => ({ id: uid(), naam: naam || '', ramen: [] });
 const nieuwRaam = nr => ({ id: uid(), nr: String(nr), omschrijving: '', ondergrond: '', kozijndiepte: '', obstakels: [], fotos: [], opmerking: '', producten: [] });
 const gordStandaard = () => ({ stelstuk: 'Stel', plooi: 'Enkele plooi', halvebanen: 'Nee', confectie: 'Automatisch', loodkoord: 'Nee', voering: '', voeringkleur: '', voeren: 'Vast', instomen: 'Nee', rapport: '', rails: 'Geen', runners: '', bochten: '', inhangen: 'Ja' });
-const nieuwProduct = () => ({ id: uid(), cat: '', art: '', kleurnr: '', kleur: '', pk: '', opties: ['', '', ''], plaatsen: 'Ja', aantal: 1, montage: 'in', bevestiging: '', zijde: '', B: ['', '', ''], H: ['', '', ''], par: {}, hand: { B: '', H: '', reden: '' }, gord: gordStandaard(), opmerking: '' });
+const nieuwProduct = () => ({ id: uid(), cat: '', art: '', kleurnr: '', kleur: '', pk: '', opties: ['', '', ''], plaatsen: 'Ja', aantal: 1, montage: 'in', bevestiging: '', montagehoogte: '', zijde: '', B: ['', '', ''], H: ['', '', ''], par: {}, hand: { B: '', H: '', reden: '' }, gord: gordStandaard(), opmerking: '' });
 
 /* ---------- catalogus ---------- */
 const catModus = c => (CAT.categorieen.find(x => x.naam === c) || {}).modus || '';
@@ -145,6 +145,7 @@ function bereken(p) {
     if (hv > 0) { const oud = r[k]; r[k] = hv; r.hand[k] = true; r['uit' + k] = `HANDMATIG ${hv}` + (oud != null ? ` (berekend was ${oud})` : ''); }
   });
   if ((r.hand.B || r.hand.H) && !(p.hand.reden || '').trim()) r.waarsch.push('Reden voor handmatige bestelmaat ontbreekt.');
+  if (!(parseMaat(p.montagehoogte) > 0)) r.waarsch.push('Montagehoogte ontbreekt (verplicht).');
   [['Breedte', mB], ['Hoogte', mH]].forEach(([naam, m]) => {
     m.forEach(v => { if (v < 200) r.waarsch.push(`${naam} ${v} mm is erg klein. Is dit in cm gemeten?`); if (v > 8000) r.waarsch.push(`${naam} ${v} mm is erg groot. Klopt dit?`); });
     if (m.length > 1 && Math.max(...m) - Math.min(...m) > 5) r.waarsch.push(`${naam}: metingen verschillen ${Math.max(...m) - Math.min(...m)} mm – scheef kozijn, controleren. Kleinste maat gebruikt.`);
@@ -238,6 +239,7 @@ function liveUpdate(el) {
   const res = $('.resultaat', kaart); if (res) res.innerHTML = resultaatHTML(p);
   const ki = $('.kleur-info', kaart); if (ki) ki.innerHTML = kleurInfoHTML(p);
   $$('[data-par]', kaart).forEach(inp => inp.classList.toggle('afwijkend', eff(p, inp.dataset.par).afw));
+  $$('[data-mh]', kaart).forEach(inp => inp.classList.toggle('verplicht', !(parseMaat(p.montagehoogte) > 0)));
 }
 
 /* ---------- UI: kop ---------- */
@@ -484,6 +486,7 @@ function productKaart(p, pre, sleutel, pi) {
         <label><input type="radio" name="m${sleutel}" value="op" data-bind="${pre}.montage" data-rerender ${p.montage === 'op' ? 'checked' : ''}> Op de dag</label>
       </div></div>` : ''}
       <label class="veld"><span>Bevestiging</span>${select(pre + '.bevestiging', CONFIG.bevestiging, p.bevestiging)}</label>
+      <label class="veld"><span>Montagehoogte (mm) <b class="verplicht-ster">*</b> <small>vloer → bevestiging</small></span><input data-meet data-live data-mh data-bind="${pre}.montagehoogte" value="${esc(p.montagehoogte || '')}" inputmode="decimal" autocomplete="off" class="${parseMaat(p.montagehoogte) > 0 ? '' : 'verplicht'}"></label>
       ${t.calc === 'zon' ? `<label class="veld"><span>Bedieningszijde <small>(niet op offerte)</small></span>${select(pre + '.zijde', CONFIG.zijde, p.zijde)}</label>` : ''}
     </div>
     <div class="strak-blok">
@@ -573,6 +576,7 @@ async function laadFotos() {
     else { const f = alleFotos(huidigeKlant).find(x => x.id === img.dataset.foto);
       if (f && f.driveId) img.replaceWith(Object.assign(document.createElement('a'), { href: `https://drive.google.com/file/d/${f.driveId}/view`, target: '_blank', textContent: 'Foto in Drive', className: 'drive-link' })); }
   }
+  schaalPrint();
 }
 const alleFotos = k => k.ruimtes.flatMap(r => r.ramen.flatMap(w => w.fotos));
 
@@ -591,7 +595,7 @@ function renderOverzicht(k) {
     <label class="schakel"><input type="checkbox" ${werkprint ? 'checked' : ''} onchange="werkprint=this.checked;route()"> Werkprint (met bijlage gemeten maten)</label>
     ${fouten.length ? `<div class="waarschuwing breed">⚠ ${fouten.length} product(en) met een melding:<br>${fouten.map(esc).join('<br>')}</div>` : ''}
   </div>
-  <div class="print">
+  <div class="print-houder"><div class="print">
   <section class="blad voorblad">
     <div class="voor-kop"><img src="logo.png" alt="Edison Interieur" class="voor-logo"><div class="voor-titel">MEETFORMULIER</div></div>
     <table class="gegevens">
@@ -618,7 +622,7 @@ function renderOverzicht(k) {
             <thead><tr><th>Product</th><th>Montage</th><th class="kol-bestel">BESTELMAAT (mm)<br><small>b × h</small></th><th>Kleur</th><th>Uitvoering</th></tr></thead>
             <tbody>${w.producten.filter(p => prodDef(p)).map(p => { const r = bereken(p); return `
               <tr><td><b>${esc(r.t.naam)}</b><br><small>${esc(p.cat)}</small>${p.plaatsen === 'Nee' ? '<br><small>klant plaatst zelf</small>' : ''}</td>
-                <td>${r.t.calc === 'zon' ? (p.montage === 'in' ? 'In de dag' : 'Op de dag') : ''}${p.bevestiging ? '<br><small>' + esc(p.bevestiging) + '</small>' : ''}</td>
+                <td>${r.t.calc === 'zon' ? (p.montage === 'in' ? 'In de dag' : 'Op de dag') : ''}${p.bevestiging ? '<br><small>' + esc(p.bevestiging) + '</small>' : ''}${r.t.calc !== 'los' ? (parseMaat(p.montagehoogte) > 0 ? '<br><small>Mh ' + parseMaat(p.montagehoogte) + ' mm</small>' : '<br><small class="fout">Mh ontbreekt</small>') : ''}</td>
                 <td class="kol-bestel">${r.t.calc === 'los' ? `${esc(p.aantal)}×` : `<span class="bestel-print">${fmtMaat(r)}</span>`}${r.hand.B || r.hand.H ? '<br><span class="tag">handmatig: ' + esc(p.hand.reden || 'geen reden') + '</span>' : ''}${r.afwijkend.length ? '<br><small class="afw">afwijkend: ' + esc(r.afwijkend.join(', ')) + '</small>' : ''}</td>
                 <td>${esc(kleurTekst(p))}${effPk(p) ? '<br><small>' + esc(effPk(p)) + '</small>' : ''}</td>
                 <td><small>${esc(uitvoeringTekst(p))}${p.opmerking ? '<br><i>' + esc(p.opmerking) + '</i>' : ''}</small></td></tr>
@@ -638,15 +642,28 @@ function renderOverzicht(k) {
       ${ruimtes.flatMap(ru => ru.ramen.flatMap(w => w.producten.map(p => [p, bereken(p)]).filter(([, r]) => r && r.t.calc !== 'los').map(([p, r]) => `<tr><td>${esc(ru.naam)}</td><td>${esc(w.nr)}</td><td>${esc(r.t.naam)}</td><td>${r.t.calc === 'zon' ? (p.montage === 'in' ? 'In' : 'Op') : ''}</td><td>${p.B.map(v => esc(v) || '–').join(' / ')}</td><td>${p.H.map(v => esc(v) || '–').join(' / ')}</td><td>${fmtStrak(r)}</td><td><small>${esc(r.uitB)}${r.uitH ? '<br>' + esc(r.uitH) : ''}</small></td></tr>`))).join('')}
       </tbody></table></section>`;
   }
-  html += '</div>';
+  html += '</div></div>';
   app().innerHTML = html;
-  laadFotos(); updateBadge();
+  schaalPrint(); laadFotos(); updateBadge();
 }
 function samenvatting(ru) {
   const telling = {};
   ru.ramen.forEach(w => w.producten.forEach(p => { const t = prodDef(p); if (t) telling[t.naam] = (telling[t.naam] || 0) + (t.calc === 'los' ? Number(p.aantal) || 1 : 1); }));
   return Object.entries(telling).map(([n, c]) => `${c}× ${esc(n)}`).join(', ');
 }
+
+/* A4 op scherm verkleinen tot schermbreedte (print blijft 100%) */
+function schaalPrint() {
+  const h = $('.print-houder'), p = $('.print'); if (!h || !p) return;
+  p.style.transform = '';
+  const z = Math.min(1, (document.documentElement.clientWidth - 16) / p.offsetWidth);
+  p.style.transform = `scale(${z})`;
+  h.style.width = (p.offsetWidth * z) + 'px';
+  h.style.height = (p.offsetHeight * z) + 'px';
+  $$('img', p).forEach(i => { if (!i.complete) i.addEventListener('load', schaalPrint, { once: true }); });
+}
+window.addEventListener('resize', schaalPrint);
+window.addEventListener('afterprint', schaalPrint);
 
 /* ---------- Export naar Excel (tab Import -> macro ImporteerMeting) ---------- */
 function exportRegels(k) {
@@ -771,11 +788,11 @@ function renderLeeg() {
         <div class="strak-vak"><b>GEMETEN – NIET BESTELLEN</b><div>B: ______ / ______ / ______</div><div>H: ______ / ______ / ______</div></div>
         <div class="bestel-vak"><b>BESTELMAAT (mm)</b><div class="groot">B ________ × H ________</div></div>
       </div>
-      <div class="leeg-rij">${lijn('Kleurnummer')}${lijn('Opties')}</div>
+      <div class="leeg-rij">${lijn('Montagehoogte * (mm)')}${lijn('Kleurnummer')}${lijn('Opties')}</div>
     </div>`;
   app().innerHTML = kop('Lege printversie', '#/') + `
   <div class="werkbalk no-print"><button class="knop primair" onclick="window.print()">Printen</button><span class="uitleg">Blad 1 is het voorblad, blad 2 print je zo vaak als nodig (één per ruimte).</span></div>
-  <div class="print">
+  <div class="print-houder"><div class="print">
     <section class="blad voorblad">
       <div class="voor-kop"><img src="logo.png" alt="Edison Interieur" class="voor-logo"><div class="voor-titel">MEETFORMULIER</div></div>
       <div class="leeg-rij">${lijn('Naam')}${lijn('Datum')}</div>
@@ -791,8 +808,8 @@ function renderLeeg() {
       ${raamblok()}${raamblok()}${raamblok()}
       <div class="blad-voet">Alle maten in mm. Bestel alleen op de BESTELMAAT.</div>
     </section>
-  </div>`;
-  updateBadge();
+  </div></div>`;
+  schaalPrint(); updateBadge();
 }
 
 /* ---------- synchronisatie ---------- */
@@ -809,7 +826,7 @@ function metBerekening(k) {
   const c = kopie(k);
   c.ruimtes.forEach(ru => ru.ramen.forEach(w => w.producten.forEach(p => {
     const r = bereken(p);
-    p.berekend = r ? { naam: r.t.naam, cat: p.cat, calc: r.t.calc, B: r.B, H: r.H, sB: r.sB, sH: r.sH, hand: r.hand.B || r.hand.H, kleur: kleurTekst(p), pk: effPk(p), uitvoering: uitvoeringTekst(p) } : null;
+    p.berekend = r ? { naam: r.t.naam, cat: p.cat, calc: r.t.calc, B: r.B, H: r.H, sB: r.sB, sH: r.sH, hand: r.hand.B || r.hand.H, kleur: kleurTekst(p), pk: effPk(p), uitvoering: (parseMaat(p.montagehoogte) > 0 ? 'montagehoogte ' + parseMaat(p.montagehoogte) + ' mm · ' : '') + uitvoeringTekst(p) } : null;
   })));
   return c;
 }
