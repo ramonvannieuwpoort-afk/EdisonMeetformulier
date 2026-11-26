@@ -6,12 +6,15 @@
    ========================================================= */
 
 const CONFIG = {
-  versie: '2.3.1',
+  versie: '2.4.0',
 
   // Beginwaarden (aan te passen in de app onder Instellingen)
   standaard: {
     overlap: 50,        // mm, opgeteld bij railbreedte (gordijnen) – Excel rekent rails = breedte − 50
-    vloerafstand: 10,   // mm, afgetrokken van hoogte (gordijnen)
+    vloerafstand: 10,   // mm, gordijn net boven de grond: kortste hoogte − dit
+    opGrond: 50,        // mm, gordijn op de grond: langste hoogte + dit
+    vensterbank: 10,    // mm, gordijn tot de vensterbank: kortste hoogte − dit
+    vitrageExtra: 5,    // mm, extra korter voor een vitrage achter een overgordijn (alleen boven grond/vensterbank)
     aftrekB: 10,        // mm, aftrek breedte bij montage IN de dag
     aftrekH: 0,         // mm, aftrek hoogte bij montage IN de dag
     overmaatB: 0,       // mm, extra breedte bij montage OP de dag (totaal)

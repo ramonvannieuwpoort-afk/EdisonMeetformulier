@@ -47,7 +47,7 @@ if (navigator.storage && navigator.storage.persist) navigator.storage.persist().
 const nieuweKlant = () => ({ id: uid(), naam: '', adres: '', pcplaats: '', datum: vandaag(), offertenr: '', telefoon: '', email: '', opmerking: '', ruimtes: [], updated: Date.now(), syncedAt: 0, verwijderd: false });
 const nieuweRuimte = naam => ({ id: uid(), naam: naam || '', ramen: [] });
 const nieuwRaam = nr => ({ id: uid(), nr: String(nr), omschrijving: '', ondergrond: '', kozijndiepte: '', obstakels: [], fotos: [], opmerking: '', producten: [] });
-const gordStandaard = () => ({ stelstuk: 'Stel', plooi: 'Enkele plooi', halvebanen: 'Nee', confectie: 'Automatisch', loodkoord: 'Nee', voering: '', voeringkleur: '', voeren: 'Vast', instomen: 'Nee', rapport: '', rails: 'Geen', runners: '', bochten: '', inhangen: 'Ja' });
+const gordStandaard = () => ({ laag: '', indeling: 'gelijk', links: '', schuift: '', afwerking: 'boven', basis: 'kort', correctie: '', vanaf: 'Plafond', stelstuk: 'Stel', plooi: 'Enkele plooi', halvebanen: 'Nee', confectie: 'Automatisch', loodkoord: 'Nee', voering: '', voeringkleur: '', voeren: 'Vast', instomen: 'Nee', rapport: '', rails: 'Geen', runners: '', bochten: '', inhangen: 'Ja' });
 const nieuwProduct = () => ({ id: uid(), cat: '', art: '', kleurnr: '', kleur: '', pk: '', opties: ['', '', ''], plaatsen: 'Ja', aantal: 1, montage: 'in', bevestiging: '', montagehoogte: '', zijde: '', B: ['', '', ''], H: ['', '', ''], par: {}, hand: { B: '', H: '', reden: '' }, gord: gordStandaard(), opmerking: '' });
 
 /* ---------- catalogus ---------- */
@@ -82,6 +82,23 @@ function zijdeVerplicht(p) { const o = gekozenOpties(p); return !o.some(isMotor)
 const optieLijst = p => { const a = artDef(p); return a && a.og ? (CAT.opties[a.og] || []) : []; };
 const gekozenOpties = p => (p.opties || []).filter(Boolean);
 const effPk = p => { if (p.pk) return p.pk; const k = kleurInfo(p); return k && !k.fout ? k.pk : ''; };
+
+/* ---------- gordijnen ---------- */
+const AFWERKING = { boven: 'Net boven de grond', grond: 'Op de grond', vensterbank: 'Tot de vensterbank', vrij: 'Vrij (in overleg)' };
+function gordMigreer(g) {
+  if (!g.indeling) g.indeling = g.stelstuk === 'Stuk' ? 'stuk' : 'gelijk';
+  if (!g.afwerking) g.afwerking = 'boven';
+  if (!g.basis) g.basis = 'kort';
+  if (!g.vanaf) g.vanaf = 'Plafond';
+  if (g.laag === undefined) g.laag = '';
+  return g;
+}
+function raamVan(p) {
+  for (const k of Object.values(DB.klanten)) for (const ru of k.ruimtes) for (const w of ru.ramen) if (w.producten.some(q => q.id === p.id)) return w;
+  return null;
+}
+const gordijnenOpRaam = p => { const w = raamVan(p); return w ? w.producten.filter(q => q.cat && catModus(q.cat) === 'gordijn' && q.art) : []; };
+function tweedeLaag(p) { return (p.gord.laag === 'Vitrage') && gordijnenOpRaam(p).some(q => q.id !== p.id && q.gord && q.gord.laag === 'Overgordijn'); }
 
 /* maat parsen: altijd naar hele mm */
 function parseMaat(s) {
@@ -146,10 +163,30 @@ function bereken(p) {
   const sB = mB.length ? Math.min(...mB) : null, sH = mH.length ? Math.min(...mH) : null;
   r.sB = sB; r.sH = sH;
   if (t.calc === 'stof') {
-    const ov = eff(p, 'overlap'), vl = eff(p, 'vloerafstand');
-    r.params = [['overlap', 'Overlap', ov], ['vloerafstand', 'Vloerafstand', vl]];
+    const g = gordMigreer(p.gord);
+    const ov = eff(p, 'overlap');
+    r.params = [['overlap', 'Overlap', ov]];
     if (sB != null) { r.B = sB + ov.v; r.uitB = `${sB} + ${ov.v} overlap = ${r.B}`; }
-    if (sH != null) { r.H = sH - vl.v; r.uitH = `${sH} − ${vl.v} vloerafstand = ${r.H}`; }
+    const lang = g.afwerking === 'grond' || (g.afwerking === 'vrij' && g.basis === 'lang');
+    const basisH = mH.length ? (lang ? Math.max(...mH) : Math.min(...mH)) : null;
+    r.sH = basisH;
+    if (basisH != null) {
+      let corr = 0, uit = `${lang ? 'langste' : 'kortste'} ${basisH}`;
+      if (g.afwerking === 'boven') { const e = eff(p, 'vloerafstand'); r.params.push(['vloerafstand', 'Net boven de grond (−)', e]); corr = -e.v; uit += ` − ${e.v} boven de grond`; }
+      else if (g.afwerking === 'vensterbank') { const e = eff(p, 'vensterbank'); r.params.push(['vensterbank', 'Boven vensterbank (−)', e]); corr = -e.v; uit += ` − ${e.v} boven vensterbank`; }
+      else if (g.afwerking === 'grond') { const e = eff(p, 'opGrond'); r.params.push(['opGrond', 'Op de grond (+)', e]); corr = e.v; uit += ` + ${e.v} op de grond`; }
+      else { const c = parseInt(String(g.correctie).replace(/\s/g, ''), 10); if (isNaN(c)) r.waarsch.push('Vrije afwerking: vul de correctie in mm in (bijv. +100 of −15).'); else { corr = c; uit += ` ${c < 0 ? '−' : '+'} ${Math.abs(c)} vrij`; } }
+      if ((g.afwerking === 'boven' || g.afwerking === 'vensterbank') && tweedeLaag(p)) { const e = eff(p, 'vitrageExtra'); r.params.push(['vitrageExtra', 'Extra vitrage (−)', e]); corr -= e.v; uit += ` − ${e.v} tweede laag`; }
+      r.H = basisH + corr; r.uitH = `${uit} = ${r.H}`;
+    }
+    if (g.indeling === 'stuk' && !g.schuift) r.waarsch.push('Stuk: kies de schuifrichting.');
+    if (g.indeling === 'ongelijk') {
+      const l = parseMaat(g.links);
+      if (!(l > 0)) r.waarsch.push('Ongelijke delen: vul de breedte van het linkerdeel in.');
+      else if (r.B != null && l >= r.B) r.waarsch.push(`Linkerdeel (${l}) is breder dan het hele gordijn (${r.B}).`);
+      else if (r.B != null) r.delen = [l, r.B - l];
+    }
+    if (gordijnenOpRaam(p).length > 1 && !g.laag) r.waarsch.push('Meerdere gordijnen op dit raam: kies de laag (overgordijn / vitrage).');
   } else if (p.montage === 'in') {
     const aB = eff(p, 'aftrekB'), aH = eff(p, 'aftrekH');
     r.params = [['aftrekB', 'Aftrek breedte', aB], ['aftrekH', 'Aftrek hoogte', aH]];
@@ -170,7 +207,11 @@ function bereken(p) {
   if (!(parseMaat(p.montagehoogte) > 0)) r.waarsch.push('Montagehoogte ontbreekt (verplicht).');
   [['Breedte', mB], ['Hoogte', mH]].forEach(([naam, m]) => {
     m.forEach(v => { if (v < 200) r.waarsch.push(`${naam} ${v} mm is erg klein. Is dit in cm gemeten?`); if (v > 8000) r.waarsch.push(`${naam} ${v} mm is erg groot. Klopt dit?`); });
-    if (m.length > 1 && Math.max(...m) - Math.min(...m) > 5) r.waarsch.push(`${naam}: metingen verschillen ${Math.max(...m) - Math.min(...m)} mm – scheef kozijn, controleren. Kleinste maat gebruikt.`);
+    if (m.length > 1 && Math.max(...m) - Math.min(...m) > 5) {
+      const d = Math.max(...m) - Math.min(...m);
+      if (t.calc === 'stof' && naam === 'Hoogte') r.info4 = `Hoogtes verschillen ${d} mm – vloer of plafond loopt af. ${r.uitH.startsWith('langste') ? 'Langste' : 'Kortste'} maat gebruikt.`;
+      else r.waarsch.push(`${naam}: metingen verschillen ${d} mm – scheef kozijn, controleren. Kleinste maat gebruikt.`);
+    }
   });
   const tab = t.calc === 'zon' ? maxTabel(p) : null;
   if (tab && r.B != null && r.H != null) {
@@ -193,7 +234,10 @@ function kleurTekst(p) {
 function uitvoeringTekst(p) {
   const t = prodDef(p); if (!t) return '';
   if (t.calc === 'stof') {
-    const g = p.gord; return [g.stelstuk, g.plooi, g.voering && 'voering ' + g.voering + (g.voeringkleur ? ' ' + g.voeringkleur : ''), g.voering && g.voeren === 'Los' && 'los gevoerd', g.loodkoord === 'Ja' && 'loodkoord', g.instomen === 'Ja' && 'instomen', g.rails !== 'Geen' && g.rails, g.runners, g.bochten && g.bochten + ' bocht(en)'].filter(Boolean).join(' · ');
+    const g = gordMigreer(p.gord), r = bereken(p);
+    const ind = g.indeling === 'stuk' ? 'stuk' + (g.schuift ? ', schuift ' + g.schuift.toLowerCase() : '') : g.indeling === 'ongelijk' ? 'stel ongelijk' + (r && r.delen ? ` (links ${r.delen[0]} / rechts ${r.delen[1]} mm)` : '') : 'stel';
+    const afw = g.afwerking === 'vrij' ? `vrij: ${g.basis === 'lang' ? 'langste' : 'kortste'} ${g.correctie || ''} mm` : AFWERKING[g.afwerking].toLowerCase();
+    return [g.laag && g.laag.toLowerCase(), ind, g.plooi, afw, 'gemeten vanaf ' + g.vanaf.toLowerCase(), g.voering && 'voering ' + g.voering + (g.voeringkleur ? ' ' + g.voeringkleur : ''), g.voering && g.voeren === 'Los' && 'los gevoerd', g.loodkoord === 'Ja' && 'loodkoord', g.instomen === 'Ja' && 'instomen', g.rails !== 'Geen' && g.rails, g.runners, g.bochten && g.bochten + ' bocht(en)'].filter(Boolean).join(' · ');
   }
   const kp = kleurInfo(p);
   return [kp && !kp.fout && kp.plisse && 'plissé ' + kp.plisse + ' mm', ...gekozenOpties(p), p.zijde && 'bediening ' + p.zijde.toLowerCase()].filter(Boolean).join(' · ');
@@ -268,6 +312,10 @@ function liveUpdate(el) {
   const kaart = el.closest('[data-prod]'); if (!kaart) return;
   const [w, pi] = prodVan(kaart.dataset.prod); const p = w.producten[pi];
   const res = $('.resultaat', kaart); if (res) res.innerHTML = resultaatHTML(p);
+  // laag van een gordijn beïnvloedt de vitrage op hetzelfde raam
+  if (el.dataset.bind && /\.gord\.laag$/.test(el.dataset.bind)) $$('[data-prod]').forEach(kk => { if (kk !== kaart) { const [w2, pi2] = prodVan(kk.dataset.prod); const r2 = $('.resultaat', kk); if (r2) r2.innerHTML = resultaatHTML(w2.producten[pi2]); } });
+  $$('[data-bind$=".gord.laag"]', kaart).forEach(sel => sel.classList.toggle('verplicht', sel.classList.contains('verplicht') && !p.gord.laag));
+  $$('[data-bind$=".gord.links"]', kaart).forEach(inp => inp.classList.toggle('verplicht', !(parseMaat(p.gord.links) > 0)));
   const ki = $('.kleur-info', kaart); if (ki) ki.innerHTML = kleurInfoHTML(p);
   $$('[data-par]', kaart).forEach(inp => inp.classList.toggle('afwijkend', eff(p, inp.dataset.par).afw));
   $$('[data-zijde]', kaart).forEach(sel => sel.classList.toggle('verplicht', zijdeVerplicht(p) && !p.zijde));
@@ -596,10 +644,23 @@ function productKaart(p, pre, sleutel, pi) {
     if (ol.length) blok += `<div class="veld"><span>Opties (max. 3, komen op de offerte)</span><div class="raster3">${[0, 1, 2].map(i => select(`${pre}.opties.${i}`, ol, p.opties[i], 'data-live', `Optie ${i + 1}`)).join('')}</div></div>`;
   }
   if (t.modus === 'gordijn') {
-    const g = p.gord, gp = pre + '.gord', L = CAT.lijsten;
+    const g = gordMigreer(p.gord), gp = pre + '.gord', L = CAT.lijsten;
+    const seg = (veld, opties, live) => `<div class="segment">${opties.map(([v, l]) => `<label><input type="radio" name="${veld.replace(/\./g, '_')}" value="${v}" data-bind="${veld}" ${live ? 'data-live' : 'data-rerender'} ${g[veld.split('.').pop()] === v ? 'checked' : ''}> ${l}</label>`).join('')}</div>`;
+    const meer = gordijnenOpRaam(p).length > 1;
     blok += `<div class="raster2">
-      <label class="veld"><span>Stel / stuk</span>${select(gp + '.stelstuk', L.stelstuk, g.stelstuk, '', null)}</label>
+      <label class="veld"><span>Laag${meer ? ' <b class="verplicht-ster">*</b>' : ''}</span>${select(gp + '.laag', ['Overgordijn', 'Vitrage', 'Inbetween'], g.laag, `data-live class="${meer && !g.laag ? 'verplicht' : ''}"`)}</label>
       <label class="veld"><span>Plooi</span>${select(gp + '.plooi', L.plooi, g.plooi, '', null)}</label>
+    </div>
+    <div class="veld"><span>Indeling</span>${seg(gp + '.indeling', [['gelijk', 'Stel gelijk'], ['ongelijk', 'Stel ongelijk'], ['stuk', 'Stuk']])}</div>
+    ${g.indeling === 'ongelijk' ? `<label class="veld"><span>Breedte linkerdeel (mm) <b class="verplicht-ster">*</b> <small>rechterdeel = rest</small></span><input data-bind="${gp}.links" data-live value="${esc(g.links)}" inputmode="numeric" class="${parseMaat(g.links) > 0 ? '' : 'verplicht'}"></label>` : ''}
+    ${g.indeling === 'stuk' ? `<div class="veld"><span>Schuift naar <b class="verplicht-ster">*</b></span>${seg(gp + '.schuift', [['Links', 'Links'], ['Rechts', 'Rechts']], true)}</div>` : ''}
+    <div class="raster2">
+      <label class="veld"><span>Afwerking onderkant</span><select data-bind="${gp}.afwerking" data-rerender>${Object.entries(AFWERKING).map(([v, l]) => `<option value="${v}" ${g.afwerking === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <div class="veld"><span>Gemeten vanaf</span>${seg(gp + '.vanaf', [['Plafond', 'Plafond'], ['Bovenkant rail', 'Bovenkant rail']], true)}</div>
+      ${g.afwerking === 'vrij' ? `<label class="veld"><span>Uitgaan van</span><select data-bind="${gp}.basis" data-live><option value="kort" ${g.basis === 'kort' ? 'selected' : ''}>kortste hoogte</option><option value="lang" ${g.basis === 'lang' ? 'selected' : ''}>langste hoogte</option></select></label>
+      <label class="veld"><span>Correctie (mm) <b class="verplicht-ster">*</b> <small>+ langer / − korter</small></span><input data-bind="${gp}.correctie" data-live value="${esc(g.correctie)}" inputmode="text" placeholder="bijv. +100 of -15"></label>` : ''}
+    </div>
+    <div class="raster2">
       <label class="veld"><span>Voering</span>${select(gp + '.voering', L.voering, g.voering, '', 'ongevoerd')}</label>
       <label class="veld"><span>Voering kleur</span><input data-bind="${gp}.voeringkleur" value="${esc(g.voeringkleur)}"></label>
       <label class="veld"><span>Voeren</span>${select(gp + '.voeren', L.voeren, g.voeren, '', null)}</label>
@@ -608,7 +669,7 @@ function productKaart(p, pre, sleutel, pi) {
       <label class="veld"><span>Runners (bij wave)</span>${select(gp + '.runners', L.runners, g.runners)}</label>
       <label class="veld"><span>Bochten (aantal)</span><input data-bind="${gp}.bochten" value="${esc(g.bochten)}" inputmode="numeric"></label>
       <label class="veld"><span>Rapport (mm)</span><input data-bind="${gp}.rapport" value="${esc(g.rapport)}" inputmode="numeric"></label>
-      <label class="veld"><span>Loodkoord</span>${select(gp + '.loodkoord', L.janee, g.loodkoord, '', null)}</label>
+      <label class="veld vink-veld"><input type="checkbox" ${g.loodkoord === 'Ja' ? 'checked' : ''} onchange="zetLoodkoord('${pre}', this.checked)"> Loodkoord</label>
       <label class="veld"><span>Instomen</span>${select(gp + '.instomen', L.janee, g.instomen, '', null)}</label>
       <label class="veld"><span>Halve banen</span>${select(gp + '.halvebanen', L.janee, g.halvebanen, '', null)}</label>
       <label class="veld"><span>Inhangen</span>${select(gp + '.inhangen', L.janee, g.inhangen, '', null)}</label>
@@ -616,7 +677,7 @@ function productKaart(p, pre, sleutel, pi) {
   }
   // maten
   if (t.calc !== 'los') {
-    const [lB, lH] = t.calc === 'stof' ? ['Railbreedte', 'Hoogte (bovenkant rail → vloer)'] : ['Breedte', 'Hoogte'];
+    const [lB, lH] = t.calc === 'stof' ? ['Railbreedte', `Hoogte (${gordMigreer(p.gord).vanaf.toLowerCase()} → vloer)`] : ['Breedte', 'Hoogte'];
     const meetrij = (label, as) => `<div class="meetrij"><span class="meetlabel">${label}</span>${[0, 1, 2].map(i => `<input data-meet data-live data-bind="${pre}.${as}.${i}" value="${esc(p[as][i])}" inputmode="decimal" placeholder="${i === 0 ? 'mm' : (i === 1 ? '2e' : '3e')}" autocomplete="off" class="meet">`).join('')}</div>`;
     const r = bereken(p);
     blok += `<div class="raster2">
@@ -656,6 +717,7 @@ function productKaart(p, pre, sleutel, pi) {
     </div>`;
   return `<section class="kaart product" data-prod="${sleutel}">${kop}${blok}</section>`;
 }
+function zetLoodkoord(pre, aan) { zetPad(huidigeKlant, pre + '.gord.loodkoord', aan ? 'Ja' : 'Nee'); gewijzigd(huidigeKlant); }
 function kleurInfoHTML(p) {
   const k = kleurInfo(p);
   if (!k) return '';
@@ -667,7 +729,7 @@ function resultaatHTML(p) {
   if (!r) return '';
   const meldingen = `${r.afwijkend.length ? `<div class="let-op">Afwijkend van standaard: ${esc(r.afwijkend.join(', '))}</div>` : ''}
     ${r.waarsch.map(w => `<div class="waarschuwing">⚠ ${esc(w)}</div>`).join('')}
-    ${r.info ? `<div class="info">${esc(r.info)}</div>` : ''}${r.info2 ? `<div class="info">Let op: ${esc(r.info2)}</div>` : ''}${r.info3 ? `<div class="info">${esc(r.info3)}</div>` : ''}`;
+    ${r.info ? `<div class="info">${esc(r.info)}</div>` : ''}${r.info2 ? `<div class="info">Let op: ${esc(r.info2)}</div>` : ''}${r.info3 ? `<div class="info">${esc(r.info3)}</div>` : ''}${r.info4 ? `<div class="let-op">${esc(r.info4)}</div>` : ''}${r.delen ? `<div class="info">Verdeling: links ${r.delen[0]} mm · rechts ${r.delen[1]} mm</div>` : ''}`;
   if (r.t.calc === 'los') return meldingen;
   return `<div class="bestel ${r.hand.B || r.hand.H ? 'hand' : ''}">
       <div class="bestel-label">BESTELMAAT <small>mm</small>${r.hand.B || r.hand.H ? ' <span class="tag">handmatig</span>' : ''}</div>
@@ -820,7 +882,7 @@ function exportRegels(k) {
       heeft = true;
       if (r.t.calc === 'stof') {
         const g = p.gord;
-        const rij = [ru.naam, p.cat, p.art, p.kleur, r.B ?? '', r.H ?? '', g.stelstuk, g.plooi, g.halvebanen, g.confectie, g.loodkoord, g.voering, g.voeringkleur, g.voeren, g.instomen, g.rapport, g.rails, g.runners, g.bochten, g.inhangen];
+        const rij = [ru.naam, p.cat, p.art, p.kleur, r.B ?? '', r.H ?? '', gordMigreer(g).indeling === 'stuk' ? 'Stuk' : 'Stel', g.plooi, g.halvebanen, g.confectie, g.loodkoord, g.voering, g.voeringkleur, g.voeren, g.instomen, g.rapport, g.rails, g.runners, g.bochten, g.inhangen];
         const s = JSON.stringify(rij); gord.set(s, { rij, n: (gord.get(s)?.n || 0) + 1 });
       } else {
         const rij = [ru.naam, p.cat, p.art, r.t.art.fam ? normKleur(p.kleurnr) : '', r.t.calc === 'los' ? '' : (r.B ?? ''), r.t.calc === 'los' ? '' : (r.H ?? ''), p.pk || '', p.opties[0] || '', p.opties[1] || '', p.opties[2] || '', r.t.modus === 'los' ? '' : p.plaatsen];
@@ -862,7 +924,7 @@ function renderInst() {
       <h2>Standaardwaarden</h2>
       <p class="uitleg">Gelden voor alle producten, tenzij per product afwijkend ingevuld. Alle maten in mm.</p>
       <div class="raster2">
-        ${[['overlap', 'Overlap gordijn'], ['vloerafstand', 'Vloerafstand gordijn'], ['aftrekB', 'Aftrek breedte in de dag'], ['aftrekH', 'Aftrek hoogte in de dag'], ['overmaatB', 'Overmaat breedte op de dag'], ['overmaatH', 'Overmaat hoogte op de dag']].map(([k, l]) => `<label class="veld"><span>${l}</span><input data-ibind="waarden.${k}" data-num value="${esc(w[k])}" inputmode="decimal"></label>`).join('')}
+        ${[['overlap', 'Overlap gordijn'], ['vloerafstand', 'Gordijn net boven de grond (−)'], ['opGrond', 'Gordijn op de grond (+)'], ['vensterbank', 'Gordijn tot vensterbank (−)'], ['vitrageExtra', 'Extra vitrage tweede laag (−)'], ['aftrekB', 'Aftrek breedte in de dag'], ['aftrekH', 'Aftrek hoogte in de dag'], ['overmaatB', 'Overmaat breedte op de dag'], ['overmaatH', 'Overmaat hoogte op de dag']].map(([k, l]) => `<label class="veld"><span>${l}</span><input data-ibind="waarden.${k}" data-num value="${esc(w[k])}" inputmode="decimal"></label>`).join('')}
       </div>
     </section>
     <section class="kaart">
