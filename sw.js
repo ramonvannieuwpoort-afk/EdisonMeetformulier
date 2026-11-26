@@ -1,7 +1,7 @@
 /* Service worker: maakt de app offline beschikbaar.
    Verhoog VERSIE bij elke wijziging, zodat toestellen de nieuwe versie ophalen. */
-const VERSIE = 'emf-1.0.0';
-const BESTANDEN = ['./', 'index.html', 'style.css', 'config.js', 'app.js', 'logo.png', 'manifest.webmanifest', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png'];
+const VERSIE = 'emf-2.0.0';
+const BESTANDEN = ['./', 'index.html', 'style.css', 'catalogus.js', 'config.js', 'app.js', 'logo.png', 'manifest.webmanifest', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSIE).then(c => c.addAll(BESTANDEN)).then(() => self.skipWaiting()));

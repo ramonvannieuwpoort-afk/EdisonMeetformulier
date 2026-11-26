@@ -178,3 +178,17 @@ input[type=checkbox], input[type=radio] { width: auto; }
   .blad:last-child { page-break-after: auto; break-after: auto; }
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* ===== v2 ===== */
+.raster3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+@media (max-width: 520px) { .raster3 { grid-template-columns: 1fr; } }
+.kleur-ok { background: var(--beige-licht); border-radius: 6px; padding: 6px 10px; margin: 2px 0 6px; font-size: 14px; }
+.fout { color: var(--rood); font-style: normal; }
+.waarschuwing.breed { flex-basis: 100%; }
+#adres-suggesties { margin: -2px 0 8px; }
+#adres-suggesties button { text-align: left; }
+.met-balk { padding-bottom: calc(env(safe-area-inset-bottom) + 90px); }
+.balk { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; gap: 8px; padding: 10px 12px calc(env(safe-area-inset-bottom) + 10px);
+  background: rgba(255,255,255,.96); border-top: 1px solid var(--beige); backdrop-filter: blur(6px); justify-content: center; }
+.balk .knop { flex: 1; max-width: 300px; font-size: 17px; }
+#melding { cursor: pointer; }
