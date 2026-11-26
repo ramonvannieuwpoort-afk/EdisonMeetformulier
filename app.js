@@ -71,6 +71,14 @@ function maxTabel(p) {
   const pk = effPk(p);
   return m['*'] || m[pk] || null;
 }
+// bediening: maximaal één hoofdbediening; zijde verplicht bij handbediening met ketting/koord/stang
+const isBediening = o => /smartcord|literise|softraise|kettingbediening|eindloos koord|^handgreep|trekkoord|gemotoriseerd|slingerstang/i.test(o);
+const isMotor = o => /gemotoriseerd/i.test(o);
+const vraagtZijde = o => /smartcord|kettingbediening|eindloos koord|trekkoord|slingerstang|bedieningsstang/i.test(o);
+const isTDBU = o => /tdbu|top down/i.test(o);
+// opties die om een zijde vragen; bij TDBU zit SmartCord aan beide kanten, dan telt SmartCord niet mee
+const zijdeOpties = p => { const o = gekozenOpties(p), tdbu = o.some(isTDBU); return o.filter(x => vraagtZijde(x) && !(tdbu && /smartcord/i.test(x))); };
+function zijdeVerplicht(p) { const o = gekozenOpties(p); return !o.some(isMotor) && !/powerview/i.test(p.art || '') && zijdeOpties(p).length > 0; }
 const optieLijst = p => { const a = artDef(p); return a && a.og ? (CAT.opties[a.og] || []) : []; };
 const gekozenOpties = p => (p.opties || []).filter(Boolean);
 const effPk = p => { if (p.pk) return p.pk; const k = kleurInfo(p); return k && !k.fout ? k.pk : ''; };
@@ -123,6 +131,13 @@ function bereken(p) {
   }
   const pk = effPk(p);
   if (pk && t.art.pk && !t.art.pk.split(',').map(s => s.trim()).includes(pk)) r.waarsch.push(`${pk} is niet leverbaar voor ${t.naam} (wel: ${t.art.pk}).`);
+  if (t.modus === 'zon') {
+    const o = gekozenOpties(p), bed = o.filter(isBediening);
+    if (new Set(o).size < o.length) r.waarsch.push('Dezelfde optie is twee keer gekozen.');
+    if (bed.length > 1) r.waarsch.push(`Meer dan één bediening gekozen (${bed.join(' + ')}). Kies er één.`);
+    else if (o.some(isMotor) && o.some(vraagtZijde)) r.waarsch.push(`Motor gecombineerd met handbediening (${o.filter(vraagtZijde).join(', ')}).`);
+    if (zijdeVerplicht(p) && !p.zijde) r.waarsch.push(`Bedieningszijde ontbreekt (verplicht bij ${zijdeOpties(p).join(', ')}).`);
+  }
   if (p.overgenomen) r.waarsch.push(`Overgenomen van ${p.overgenomen} – nog niet bevestigd.`);
   if (t.art.let && t.modus === 'zon') r.info2 = t.art.let;
   if (t.calc === 'los') return r;
@@ -255,6 +270,8 @@ function liveUpdate(el) {
   const res = $('.resultaat', kaart); if (res) res.innerHTML = resultaatHTML(p);
   const ki = $('.kleur-info', kaart); if (ki) ki.innerHTML = kleurInfoHTML(p);
   $$('[data-par]', kaart).forEach(inp => inp.classList.toggle('afwijkend', eff(p, inp.dataset.par).afw));
+  $$('[data-zijde]', kaart).forEach(sel => sel.classList.toggle('verplicht', zijdeVerplicht(p) && !p.zijde));
+  $$('[data-zijde-ster]', kaart).forEach(st => st.hidden = !zijdeVerplicht(p));
   $$('[data-mh]', kaart).forEach(inp => inp.classList.toggle('verplicht', !(parseMaat(p.montagehoogte) > 0)));
 }
 
@@ -609,7 +626,7 @@ function productKaart(p, pre, sleutel, pi) {
       </div></div>` : ''}
       <label class="veld"><span>Bevestiging</span>${select(pre + '.bevestiging', CONFIG.bevestiging, p.bevestiging)}</label>
       <label class="veld"><span>Montagehoogte (mm) <b class="verplicht-ster">*</b> <small>vloer → bevestiging</small></span><input data-meet data-live data-mh data-bind="${pre}.montagehoogte" value="${esc(p.montagehoogte || '')}" inputmode="decimal" autocomplete="off" class="${parseMaat(p.montagehoogte) > 0 ? '' : 'verplicht'}"></label>
-      ${t.calc === 'zon' ? `<label class="veld"><span>Bedieningszijde <small>(niet op offerte)</small></span>${select(pre + '.zijde', CONFIG.zijde, p.zijde)}</label>` : ''}
+      ${t.calc === 'zon' ? `<label class="veld"><span>Bedieningszijde <b class="verplicht-ster" data-zijde-ster ${zijdeVerplicht(p) ? '' : 'hidden'}>*</b> <small>(niet op offerte)</small></span>${select(pre + '.zijde', CONFIG.zijde, p.zijde, `data-live data-zijde class="${zijdeVerplicht(p) && !p.zijde ? 'verplicht' : ''}"`)}</label>` : ''}
     </div>
     <div class="strak-blok">
       <div class="strak-titel">GEMETEN (strak) – niet bestellen <small>mm · ${t.calc === 'zon' && p.montage === 'in' ? '3-puntsmeting aanbevolen, kleinste telt' : 'kleinste telt'}</small></div>
