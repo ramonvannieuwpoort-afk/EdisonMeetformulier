@@ -234,6 +234,17 @@ function bereken(p) {
     const hv = parseMaat(p.hand && p.hand[k]);
     if (hv > 0) { const oud = r[k]; r[k] = hv; r.hand[k] = true; r['uit' + k] = `HANDMATIG ${hv}` + (oud != null ? ` (berekend was ${oud})` : ''); if (k === 'B' && r.naast) { r.naast.delen = Array(r.naast.n).fill(hv); r.naast.ongelijk = false; r['uitB'] += ` · ${r.naast.n} × ${hv}`; } }
   });
+  if (r.naast && r.naast.delen) {
+    const d = r.naast.delen, som = d.reduce((a, b) => a + b, 0), sp = r.naast.dag - som;
+    const kier = String(r.naast.kier).replace('.', ',');
+    r.naast.som = som; r.naast.speling = sp;
+    r.naastRegels = [
+      ['Totale dag (strak)', `${r.naast.dag} mm`],
+      r.naast.ongelijk ? ['Ongelijk verdeeld (strak)', `links ${r.naast.L} · rechts ${r.naast.dag - r.naast.L}`] : ['Gelijk verdeeld', `${r.naast.n} stuks`],
+      ['Bestelmaat', r.naast.ongelijk ? `links ${d[0]} + rechts ${d[1]} = ${som}` : `${r.naast.n} × ${d[0]} = ${som}`],
+      ['Speling totaal', `${sp} mm (${r.naast.n + 1} kiertjes van ${kier} mm${sp !== Math.round((r.naast.n + 1) * r.naast.kier) ? ', + afronding' : ''})`]
+    ];
+  }
   if ((r.hand.B || r.hand.H) && !(p.hand.reden || '').trim()) r.waarsch.push('Reden voor handmatige bestelmaat ontbreekt.');
   if (!(parseMaat(p.montagehoogte) > 0)) r.waarsch.push('Montagehoogte ontbreekt (verplicht).');
   [['Breedte', mB], ['Hoogte', mH]].forEach(([naam, m]) => {
@@ -788,7 +799,8 @@ function resultaatHTML(p) {
       <div class="bestel-label">BESTELMAAT <small>mm</small>${r.hand.B || r.hand.H ? ' <span class="tag">handmatig</span>' : ''}</div>
       <div class="bestel-maat">${fmtMaat(r)}</div>
       ${r.naast ? `<div class="bestel-naast">${esc(naastTekst(r))}</div>` : ''}
-      <div class="bestel-uitleg">${esc(r.uitB)}${r.uitH ? '<br>' + esc(r.uitH) : ''}</div>
+      ${r.naastRegels ? `<table class="naast-som">${r.naastRegels.map(([a, b], i) => `<tr class="${i === 2 ? 'nadruk' : ''}"><th>${esc(a)}</th><td>${esc(b)}</td></tr>`).join('')}</table>` : ''}
+      <div class="bestel-uitleg">${r.naastRegels ? (r.hand.B ? esc(r.uitB) + '<br>' : '') : esc(r.uitB) + (r.uitH ? '<br>' : '')}${esc(r.uitH)}</div>
     </div>${meldingen}`;
 }
 function prodVan(sleutel) { const [ri, wi, pi] = sleutel.split('.').map(Number); return [huidigeKlant.ruimtes[ri].ramen[wi], pi]; }
@@ -882,7 +894,7 @@ function renderOverzicht(k) {
             <tbody>${w.producten.filter(p => prodDef(p)).map(p => { const r = bereken(p); return `
               <tr><td><b>${esc(r.t.naam)}</b><br><small>${esc(p.cat)}</small>${p.plaatsen === 'Nee' ? '<br><small>klant plaatst zelf</small>' : ''}</td>
                 <td>${r.t.calc === 'zon' ? (p.montage === 'in' ? 'In de dag' : 'Op de dag') : ''}${p.bevestiging ? '<br><small>' + esc(p.bevestiging) + '</small>' : ''}${r.t.calc !== 'los' ? (parseMaat(p.montagehoogte) > 0 ? '<br><small>Mh ' + parseMaat(p.montagehoogte) + ' mm</small>' : '<br><small class="fout">Mh ontbreekt</small>') : ''}</td>
-                <td class="kol-bestel">${r.t.calc === 'los' ? `${esc(p.aantal)}×` : (r.naast && r.naast.delen ? (r.naast.ongelijk ? `<span class="bestel-print klein">L ${r.naast.delen[0]} × ${r.H ?? '—'}</span><br><span class="bestel-print klein">R ${r.naast.delen[1]} × ${r.H ?? '—'}</span>` : `<span class="bestel-print klein">${r.naast.n} × (${r.B} × ${r.H ?? '—'})</span>`) : `<span class="bestel-print">${fmtMaat(r)}</span>`)}${r.naast ? `<br><b>${esc(naastTekst(r))}</b><div class="dag-strak">${esc(dagStrakTekst(r))}</div>` : ''}${r.hand.B || r.hand.H ? '<br><span class="tag">handmatig: ' + esc(p.hand.reden || 'geen reden') + '</span>' : ''}${r.afwijkend.length ? '<br><small class="afw">afwijkend: ' + esc(r.afwijkend.join(', ')) + '</small>' : ''}</td>
+                <td class="kol-bestel">${r.t.calc === 'los' ? `${esc(p.aantal)}×` : (r.naast && r.naast.delen ? (r.naast.ongelijk ? `<span class="bestel-print klein">L ${r.naast.delen[0]} × ${r.H ?? '—'}</span><br><span class="bestel-print klein">R ${r.naast.delen[1]} × ${r.H ?? '—'}</span>` : `<span class="bestel-print klein">${r.naast.n} × (${r.B} × ${r.H ?? '—'})</span>`) : `<span class="bestel-print">${fmtMaat(r)}</span>`)}${r.naast ? `<br><b>${esc(naastTekst(r))}</b>${r.naast.som ? `<br><small>samen ${r.naast.som} mm · speling ${r.naast.speling} mm</small>` : ''}<div class="dag-strak">${esc(dagStrakTekst(r))}</div>` : ''}${r.hand.B || r.hand.H ? '<br><span class="tag">handmatig: ' + esc(p.hand.reden || 'geen reden') + '</span>' : ''}${r.afwijkend.length ? '<br><small class="afw">afwijkend: ' + esc(r.afwijkend.join(', ')) + '</small>' : ''}</td>
                 <td>${kleurLater(p) ? `<b class="kleur-later">${KLEUR_LATER}</b>` : esc(kleurTekst(p))}${effPk(p) ? '<br><small>' + esc(effPk(p)) + '</small>' : ''}</td>
                 <td><small>${esc(uitvoeringTekst(p))}${p.opmerking ? '<br><i>' + esc(p.opmerking) + '</i>' : ''}</small></td></tr>
               ${r.t.calc !== 'los' ? `<tr class="strak-rij no-print"><td colspan="5"><button class="mini" onclick="this.parentNode.classList.toggle('open')">Toon gemeten maten</button>
