@@ -184,5 +184,20 @@ async function maakOpdracht() {
   catch (e) { melding('Klaarzetten mislukt: ' + e.message, true); }
 }
 
+// nieuwe versie online? Dan de pagina vanzelf verversen (met een nieuw adres, zodat Windows/Chrome niets uit het geheugen haalt)
+async function checkVersie() {
+  try {
+    const t = await (await fetch('config.js?ts=' + Date.now(), { cache: 'no-store' })).text();
+    const m = t.match(/versie:\s*'([^']+)'/);
+    if (!m || m[1] === VERSIE) return;
+    if (sessionStorage.getItem('emf_winkel_ververst') === m[1]) return; // niet blijven verversen
+    sessionStorage.setItem('emf_winkel_ververst', m[1]);
+    location.replace(location.pathname + '?v=' + encodeURIComponent(m[1]) + location.hash);
+  } catch (e) {}
+}
+checkVersie();
+setInterval(checkVersie, 10 * 60 * 1000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkVersie(); });
+
 route();
 if (W.url && W.ww) haalLijst();
