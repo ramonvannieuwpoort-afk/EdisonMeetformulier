@@ -254,3 +254,10 @@ b.kleur-later { display: inline-block; border: 2px solid var(--rood); padding: 1
 .deel .bestel-maat { font-size: 26px; }
 .deel-tag { font-size: 9pt; }
 tr.deel-rij td { border-bottom: 1px dotted #ccc; }
+.historie td { font-size: 13px; vertical-align: top; }
+.historie td.knoppen { white-space: nowrap; }
+.historie td.knoppen .mini { margin-left: 4px; }
+.snap-weergave { border: 2px solid var(--beige); border-radius: 8px; padding: 8px; margin-bottom: 12px; background: #fffdf8; }
+.snap-kop { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.rij-knop { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 4px; }
+#melding .mini { margin-left: 10px; }

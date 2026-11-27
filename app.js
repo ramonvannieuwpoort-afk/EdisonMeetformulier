@@ -32,7 +32,7 @@ function bewaarLokaal() {
   try { localStorage.setItem('emf_klanten', JSON.stringify(DB.klanten)); localStorage.setItem('emf_inst', JSON.stringify(DB.inst)); }
   catch (e) { melding('Opslaan op dit toestel mislukt: ' + e.message, true); }
 }
-function gewijzigd(k) { k.updated = Date.now(); bewaarLokaal(); planSync(); updateBadge(); }
+function gewijzigd(k) { k.updated = Date.now(); bewaarLokaal(); planSync(); updateBadge(); snapPeriodiek(k); }
 function instGewijzigd() { DB.inst.updated = Date.now(); bewaarLokaal(); planSync(); updateBadge(); }
 
 const fotoDB = (() => {
@@ -313,8 +313,10 @@ function route() {
   const h = location.hash.replace(/^#\/?/, '').split('/');
   const y = window.scrollY, zelfde = route._laatst === location.hash; route._laatst = location.hash;
   if (h[0] === 'k' && DB.klanten[h[1]]) {
+    if (!huidigeKlant || huidigeKlant.id !== h[1]) snapshot(DB.klanten[h[1]], 'geopend');
     huidigeKlant = DB.klanten[h[1]];
-    if (h[2] === 'raam') renderRaam(huidigeKlant, h[3]);
+    if (h[2] === 'historie') renderHistorie(huidigeKlant);
+    else if (h[2] === 'raam') renderRaam(huidigeKlant, h[3]);
     else if (h[2] === 'overzicht') renderOverzicht(huidigeKlant);
     else if (h[2] === 'afronden') renderAfronden(huidigeKlant);
     else renderKlant(huidigeKlant);
@@ -345,6 +347,7 @@ document.addEventListener('input', e => {
     if (el.dataset.lokaal !== undefined) bewaarLokaal(); else instGewijzigd();
   }
 });
+document.addEventListener('focusin', e => { const el = e.target; if (el.dataset && el.dataset.bind) el.dataset.oud = el.value; });
 document.addEventListener('change', e => {
   const el = e.target;
   if (el.dataset.toggle && huidigeKlant) {
@@ -360,6 +363,7 @@ document.addEventListener('change', e => {
   if (el.dataset.kleur !== undefined && el.value.trim()) {
     const n = normKleur(el.value); if (n !== el.value) { el.value = n; el.dispatchEvent(new Event('input', { bubbles: true })); }
   }
+  if (el.dataset.bind && huidigeKlant && (el.dataset.meet !== undefined || /\.(hand\.[BH]|kleurnr)$/.test(el.dataset.bind))) logMaat(huidigeKlant, el);
   if (el.dataset.cat !== undefined) { const [w, pi] = prodVan(el.dataset.cat); const p = w.producten[pi]; p.art = ''; p.opties = ['', '', '']; p.pk = ''; gewijzigd(huidigeKlant); }
   if (el.dataset.rerender !== undefined) route();
 });
@@ -414,6 +418,7 @@ function renderLijst() {
         <span>${esc(k.adres)} ${esc(k.pcplaats)}</span>
         <small>${datumNL(k.datum)}${k.offertenr ? ' · offerte ' + esc(k.offertenr) : ''} · ${k.ruimtes.length} ruimtes · ${telProducten(k)} producten · ${statusTekst(k)} ${k.updated > k.syncedAt ? '· <em class="niet-sync">niet gesynchroniseerd</em>' : ''}</small></a></li>`).join('') || '<li class="leeg">Nog geen metingen.</li>'}
     </ul>
+    ${(() => { const weg = Object.values(DB.klanten).filter(k => k.verwijderd).sort((a, b) => b.updated - a.updated); return weg.length ? `<details class="kaart prullenbak"><summary>Verwijderde metingen (${weg.length})</summary><ul class="lijst">${weg.map(k => `<li class="rij-knop"><span><strong>${esc(k.naam || '(geen naam)')}</strong> <small>${datumNL(k.datum)}${k.offertenr ? ' · offerte ' + esc(k.offertenr) : ''}</small></span><button class="mini" onclick="herstelKlant('${k.id}')">Terugzetten</button></li>`).join('')}</ul></details>` : ''; })()}
     <div class="acties onder">
       <a class="knop" href="#/instellingen">Instellingen</a>
       <a class="knop" href="#/leeg">Lege printversie</a>
@@ -473,6 +478,7 @@ function renderKlant(k) {
       <a class="knop primair" href="#/k/${k.id}/afronden">Meting afronden</a>
       <a class="knop" href="#/k/${k.id}/overzicht">Overzicht &amp; print</a>
       <button class="knop" onclick="kopieerExcel()">Kopieer voor Excel</button>
+      <a class="knop" href="#/k/${k.id}/historie">Geschiedenis &amp; meetlogboek</a>
       <button class="knop gevaar" onclick="verwijderKlant()">Meting verwijderen</button>
     </div>
   </main>`;
@@ -514,7 +520,7 @@ function maakRuimte(naam) {
   const inp = $$('.ruimte-naam').pop(); if (!naam && inp) inp.focus();
 }
 function verplaatsRuimte(i, d) { const r = huidigeKlant.ruimtes; const j = i + d; if (j < 0 || j >= r.length) return; [r[i], r[j]] = [r[j], r[i]]; gewijzigd(huidigeKlant); renderKlant(huidigeKlant); }
-function verwijderRuimte(i) { const ru = huidigeKlant.ruimtes[i]; if (!confirm(`Ruimte "${ru.naam}" met ${ru.ramen.length} ramen verwijderen?`)) return; huidigeKlant.ruimtes.splice(i, 1); gewijzigd(huidigeKlant); renderKlant(huidigeKlant); }
+function verwijderRuimte(i) { const k = huidigeKlant, ru = k.ruimtes[i]; if (!confirm(`Ruimte "${ru.naam}" met ${ru.ramen.length} ramen verwijderen?`)) return; metOngedaan(k, `voor verwijderen ruimte ${ru.naam}`, `Ruimte "${ru.naam}" verwijderd.`, () => { k.ruimtes.splice(i, 1); gewijzigd(k); renderKlant(k); }); }
 function maakRaam(ri) {
   const k = huidigeKlant; const ru = k.ruimtes[ri];
   const w = nieuwRaam(ru.ramen.length + 1);
@@ -529,7 +535,8 @@ function maakRaam(ri) {
   w.producten.push(p);
   ru.ramen.push(w); gewijzigd(k); location.hash = `#/k/${k.id}/raam/${w.id}`;
 }
-function verwijderKlant() { if (!confirm('Deze hele meting verwijderen?')) return; huidigeKlant.verwijderd = true; gewijzigd(huidigeKlant); location.hash = '#/'; }
+function verwijderKlant() { const k = huidigeKlant; if (!confirm('Deze hele meting verwijderen?')) return; metOngedaan(k, 'voor verwijderen meting', `Meting ${k.naam || ''} verwijderd.`, () => { k.verwijderd = true; gewijzigd(k); location.hash = '#/'; }); }
+function herstelKlant(id) { const k = DB.klanten[id]; if (!k) return; k.verwijderd = false; gewijzigd(k); melding(`Meting ${esc(k.naam || '')} teruggezet.`); route(); }
 
 /* ---------- Montage-info (voor de plaatsers) ---------- */
 const MONTAGE = [
@@ -826,17 +833,17 @@ function resultaatHTML(p) {
 }
 function prodVan(sleutel) { const [ri, wi, pi] = sleutel.split('.').map(Number); return [huidigeKlant.ruimtes[ri].ramen[wi], pi]; }
 function bevestigProduct(s) { const [w, pi] = prodVan(s); delete w.producten[pi].overgenomen; gewijzigd(huidigeKlant); route(); }
-function leegProduct(s) { if (!confirm('Overgenomen gegevens wissen en dit product leeg maken?')) return; const [w, pi] = prodVan(s); const oud = w.producten[pi]; const n = nieuwProduct(); n.montagehoogte = oud.montagehoogte; n.B = oud.B; n.H = oud.H; w.producten[pi] = n; gewijzigd(huidigeKlant); route(); }
+function leegProduct(s) { if (!confirm('Overgenomen gegevens wissen en dit product leeg maken?')) return; const k = huidigeKlant; metOngedaan(k, 'voor leegmaken product', 'Product leeg gemaakt.', () => { const [w, pi] = prodVan(s); const oud = w.producten[pi]; const n = nieuwProduct(); n.montagehoogte = oud.montagehoogte; n.B = oud.B; n.H = oud.H; w.producten[pi] = n; gewijzigd(k); route(); }); }
 function maakProduct(ri, wi) { huidigeKlant.ruimtes[ri].ramen[wi].producten.push(nieuwProduct()); gewijzigd(huidigeKlant); route(); }
 function dupliceerProduct(s) { const [w, pi] = prodVan(s); const c = kopie(w.producten[pi]); c.id = uid(); c.overgenomen = `product ${pi + 1} van raam ${w.nr}`; w.producten.splice(pi + 1, 0, c); gewijzigd(huidigeKlant); route(); }
-function verwijderProduct(s) { if (!confirm('Product verwijderen?')) return; const [w, pi] = prodVan(s); w.producten.splice(pi, 1); gewijzigd(huidigeKlant); route(); }
+function verwijderProduct(s) { if (!confirm('Product verwijderen?')) return; const k = huidigeKlant; const [w, pi] = prodVan(s); const t = prodDef(w.producten[pi]); metOngedaan(k, `voor verwijderen product (raam ${w.nr})`, `${t ? t.naam : 'Product'} verwijderd.`, () => { w.producten.splice(pi, 1); gewijzigd(k); route(); }); }
 function kopieerRaam(ri, wi) {
   const ru = huidigeKlant.ruimtes[ri]; const c = kopie(ru.ramen[wi]);
   const bronNr = ru.ramen[wi].nr;
   c.id = uid(); c.nr = String(ru.ramen.length + 1); c.fotos = []; c.producten.forEach(p => { p.id = uid(); if (p.art) p.overgenomen = `${ru.naam} raam ${bronNr}`; p.B = ['', '', '']; p.H = ['', '', '']; p.montagehoogte = ''; p.hand = { B: '', H: '', reden: '' }; });
   ru.ramen.push(c); gewijzigd(huidigeKlant); location.hash = `#/k/${huidigeKlant.id}/raam/${c.id}`;
 }
-function verwijderRaam(ri, wi) { if (!confirm('Dit raam verwijderen?')) return; const k = huidigeKlant; k.ruimtes[ri].ramen.splice(wi, 1); gewijzigd(k); location.hash = '#/k/' + k.id; }
+function verwijderRaam(ri, wi) { if (!confirm('Dit raam verwijderen?')) return; const k = huidigeKlant; const w = k.ruimtes[ri].ramen[wi]; metOngedaan(k, `voor verwijderen raam ${w.nr} (${k.ruimtes[ri].naam})`, `Raam ${w.nr} verwijderd.`, () => { k.ruimtes[ri].ramen.splice(wi, 1); gewijzigd(k); location.hash = '#/k/' + k.id; }); }
 
 /* ---------- foto's ---------- */
 async function verklein(file) {
@@ -857,8 +864,9 @@ async function voegFotoToe(input, ri, wi) {
 }
 async function verwijderFoto(ri, wi, fi) {
   if (!confirm('Foto verwijderen? (Een kopie in Drive blijft bestaan.)')) return;
-  const w = huidigeKlant.ruimtes[ri].ramen[wi]; const [f] = w.fotos.splice(fi, 1);
-  await fotoDB.del(f.id).catch(() => {}); gewijzigd(huidigeKlant); route();
+  // foto blijft op het toestel bewaard, zodat hij via Geschiedenis terug kan
+  const k = huidigeKlant, w = k.ruimtes[ri].ramen[wi];
+  metOngedaan(k, `voor verwijderen foto (raam ${w.nr})`, 'Foto verwijderd.', () => { w.fotos.splice(fi, 1); gewijzigd(k); route(); });
 }
 async function laadFotos() {
   for (const img of $$('img[data-foto]')) {
@@ -1082,7 +1090,7 @@ function exporteer() {
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `meetformulier-backup-${vandaag()}.json`; a.click();
 }
 async function importeer(input) {
-  try { const d = JSON.parse(await input.files[0].text()); Object.assign(DB.klanten, d.klanten || {}); Object.values(DB.klanten).forEach(k => k.syncedAt = 0); bewaarLokaal(); melding('Back-up teruggezet.'); planSync(); }
+  try { const d = JSON.parse(await input.files[0].text()); Object.keys(d.klanten || {}).forEach(id => { if (DB.klanten[id]) snapshot(DB.klanten[id], 'voor back-up terugzetten'); }); Object.assign(DB.klanten, d.klanten || {}); Object.values(DB.klanten).forEach(k => k.syncedAt = 0); bewaarLokaal(); melding('Back-up teruggezet.'); planSync(); }
   catch (e) { melding('Bestand niet leesbaar.', true); }
 }
 
@@ -1120,6 +1128,174 @@ function renderLeeg() {
     </section>
   </div></div>`;
   schaalPrint(); updateBadge();
+}
+
+/* ---------- Geschiedenis: snapshots, meetlogboek, ongedaan maken ----------
+   Alles staat eerst op het toestel (IndexedDB, werkt offline) en gaat bij het
+   synchroniseren ook naar de Sheet (tabs Historie en Meetlog). */
+const histDB = (() => {
+  let dbp;
+  const open = () => dbp || (dbp = new Promise((res, rej) => {
+    const r = indexedDB.open('emf-historie', 1);
+    r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('snaps', { keyPath: 'id' }).createIndex('klant', 'klant'); d.createObjectStore('log', { keyPath: 'id' }).createIndex('klant', 'klant'); };
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  }));
+  const tx = async (store, mode, fn) => { const d = await open(); return new Promise((res, rej) => { const t = d.transaction(store, mode); const req = fn(t.objectStore(store)); t.oncomplete = () => res(req && req.result); t.onerror = () => rej(t.error); }); };
+  return {
+    put: (s, o) => tx(s, 'readwrite', st => st.put(o)),
+    putAlle: (s, arr) => tx(s, 'readwrite', st => { arr.forEach(o => st.put(o)); return null; }),
+    vanKlant: (s, id) => tx(s, 'readonly', st => st.index('klant').getAll(id)),
+    alle: s => tx(s, 'readonly', st => st.getAll()),
+    get: (s, id) => tx(s, 'readonly', st => st.get(id)),
+    del: (s, id) => tx(s, 'readwrite', st => st.delete(id))
+  };
+})();
+const SNAP_INTERVAL = 10 * 60 * 1000, BEWAAR_ALLES = 30 * 864e5;
+const laatsteSnap = {}; // klant-id -> { t, vgl }
+const snapVergelijk = k => { const c = kopie(k); delete c.updated; delete c.syncedAt; delete c.excel; return JSON.stringify(c); };
+// bewaart een volledige kopie van de meting (alleen als er iets veranderd is)
+async function snapshot(k, reden) {
+  if (!k || (!k.naam && !k.ruimtes.length)) return;
+  const t = Date.now(), vgl = snapVergelijk(k), c = kopie(k); delete c.excel;
+  const json = JSON.stringify(c), naam = k.naam, ruimtes = k.ruimtes.length, producten = telProducten(k);
+  try {
+    if (!laatsteSnap[k.id]) {
+      const eerdere = await histDB.vanKlant('snaps', k.id);
+      const nieuwste = eerdere.sort((a, b) => b.t - a.t)[0];
+      laatsteSnap[k.id] = nieuwste ? { t: nieuwste.t, vgl: nieuwste.vgl || '' } : { t: 0, vgl: '' };
+    }
+    if (laatsteSnap[k.id].vgl === vgl) { laatsteSnap[k.id].t = t; return; }
+    laatsteSnap[k.id] = { t, vgl };
+    await histDB.put('snaps', { id: uid(), klant: k.id, naam, t, reden, ruimtes, producten, json, vgl, sent: 0 });
+  } catch (e) { console.log('snapshot mislukt', e); }
+}
+function snapPeriodiek(k) { const l = laatsteSnap[k.id]; if (!l || Date.now() - l.t > SNAP_INTERVAL) snapshot(k, 'automatisch (elke 10 min)'); }
+
+// meetlogboek: elke ingetikte maat, nooit gewist
+function plekVan(k, pad) {
+  const d = pad.split('.'); const plek = []; let p = null, rest = d;
+  if (d[0] === 'ruimtes') {
+    const ru = k.ruimtes[+d[1]]; plek.push(ru ? ru.naam || 'ruimte' : 'ruimte'); rest = d.slice(2);
+    if (d[2] === 'ramen') {
+      const w = ru && ru.ramen[+d[3]]; plek.push('raam ' + (w ? w.nr : '?')); rest = d.slice(4);
+      if (d[4] === 'producten') { p = w && w.producten[+d[5]]; const t = p && prodDef(p); plek.push(t ? t.naam : 'product ' + (+d[5] + 1)); rest = d.slice(6); }
+    }
+  }
+  const [a, b] = rest;
+  const veld = a === 'B' ? `${p && naastN(p) > 1 ? 'totale dag' : 'breedte'} (${+b + 1}e meting)` : a === 'H' ? `hoogte (${+b + 1}e meting)`
+    : a === 'hand' ? 'handmatige ' + (b === 'B' ? 'breedte' : 'hoogte') : ({ montagehoogte: 'montagehoogte', naastLinks: 'dagmaat linkerdeel', kozijndiepte: 'kozijndiepte', kleurnr: 'kleurnummer' }[a] || rest.join('.'));
+  return { plek: plek.join(' · '), veld };
+}
+function logMaat(k, el) {
+  const oud = el.dataset.oud || '', nieuw = el.value;
+  if (oud === nieuw) return;
+  el.dataset.oud = nieuw;
+  const { plek, veld } = plekVan(k, el.dataset.bind);
+  histDB.put('log', { id: uid(), klant: k.id, naam: k.naam, t: Date.now(), plek, veld, oud, nieuw, sent: 0 }).catch(() => {});
+}
+
+// ongedaan maken na verwijderen
+let ongedaan = null;
+function metOngedaan(k, reden, tekst, actie) {
+  const voor = JSON.stringify(k);
+  snapshot(k, reden);
+  actie();
+  ongedaan = { id: k.id, json: voor };
+  melding(`${esc(tekst)} <button class="mini" onclick="maakOngedaan(event)">Ongedaan maken</button>`, false, 10000);
+}
+function maakOngedaan(e) {
+  if (e) e.stopPropagation();
+  if (!ongedaan) return;
+  const k = JSON.parse(ongedaan.json); ongedaan = null;
+  if (DB.klanten[k.id]) snapshot(DB.klanten[k.id], 'voor ongedaan maken');
+  k.updated = Date.now(); DB.klanten[k.id] = k;
+  if (huidigeKlant && huidigeKlant.id === k.id) huidigeKlant = k;
+  bewaarLokaal(); planSync(); updateBadge();
+  const m = $('#melding'); if (m) m.className = 'no-print';
+  if (location.hash === '#/' && !k.verwijderd) location.hash = '#/k/' + k.id; else route();
+  melding('Ongedaan gemaakt.');
+}
+
+// naar de Sheet (werkt ook als het Apps Script nog niet bijgewerkt is: dan blijft het op het toestel)
+let historieFout = '';
+async function syncHistorie() {
+  try {
+    for (let ronde = 0; ronde < 5; ronde++) {
+      const snaps = (await histDB.alle('snaps')).filter(x => !x.sent).slice(0, 5);
+      const logs = (await histDB.alle('log')).filter(x => !x.sent).slice(0, 300);
+      if (!snaps.length && !logs.length) break;
+      await post({ action: 'historie', snaps: snaps.map(({ sent, vgl, ...x }) => x), logs: logs.map(({ sent, ...x }) => x) });
+      snaps.forEach(x => { x.sent = 1; }); logs.forEach(x => { x.sent = 1; });
+      await histDB.putAlle('snaps', snaps); await histDB.putAlle('log', logs);
+    }
+    historieFout = '';
+  } catch (e) { historieFout = e.message; }
+}
+// na 30 dagen: per klant één snapshot per dag bewaren (alleen als hij al in de Sheet staat)
+async function ruimHistorieOp() {
+  try {
+    const grens = Date.now() - BEWAAR_ALLES, gezien = {};
+    const oud = (await histDB.alle('snaps')).filter(s => s.t < grens).sort((a, b) => b.t - a.t);
+    for (const s of oud) { const sl = s.klant + '|' + new Date(s.t).toISOString().slice(0, 10); if (gezien[sl] && s.sent) await histDB.del('snaps', s.id); else gezien[sl] = 1; }
+  } catch (e) {}
+}
+
+const tijdNL = t => { const d = new Date(t); return `${datumNL(d.toISOString().slice(0, 10))} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+async function renderHistorie(k) {
+  app().innerHTML = kop('Geschiedenis', '#/k/' + k.id) + `
+  <main class="inhoud">
+    <section class="kaart"><h2>${esc(k.naam || 'Meting')} – versies</h2>
+      <p class="uitleg">Volledige kopieën van deze meting: bij openen, elke 10 minuten tijdens het werken en altijd vlak voor verwijderen of terugzetten. Terugzetten bewaart eerst de huidige versie, dus het is altijd ongedaan te maken.</p>
+      <div id="snap-bekijk"></div><div id="snaps">Laden…</div></section>
+    <section class="kaart"><h2>Meetlogboek</h2>
+      <p class="uitleg">Elke maat die je hebt ingetikt, met tijd. Wordt nooit gewist. Nieuwste bovenaan.</p>
+      <div id="meetlog">Laden…</div></section>
+  </main>`;
+  updateBadge();
+  const lok = { snaps: await histDB.vanKlant('snaps', k.id).catch(() => []), logs: await histDB.vanKlant('log', k.id).catch(() => []) };
+  toonHistorie(k, lok, null);
+  if (DB.inst.url && DB.inst.sleutel && navigator.onLine) {
+    try { const j = await post({ action: 'historie_lijst', klantId: k.id }); if (location.hash === `#/k/${k.id}/historie`) toonHistorie(k, lok, j); }
+    catch (e) { const el = $('#snaps'); if (el) el.insertAdjacentHTML('afterbegin', `<p class="uitleg">Versies in de Sheet nu niet bereikbaar (${esc(e.message)}). Je ziet de versies op dit toestel.</p>`); }
+  }
+}
+function toonHistorie(k, lok, srv) {
+  const snaps = new Map(), logs = new Map();
+  (srv && srv.snaps || []).forEach(s => snaps.set(s.id, { ...s, server: true }));
+  lok.snaps.forEach(s => snaps.set(s.id, { ...s, lokaal: true }));
+  (srv && srv.logs || []).forEach(l => logs.set(l.id, l));
+  lok.logs.forEach(l => logs.set(l.id, l));
+  const S = [...snaps.values()].sort((a, b) => b.t - a.t), L = [...logs.values()].sort((a, b) => b.t - a.t);
+  const sEl = $('#snaps'), lEl = $('#meetlog'); if (!sEl || !lEl) return;
+  sEl.innerHTML = S.length ? `<table class="tabel historie"><thead><tr><th>Tijd</th><th>Moment</th><th>Inhoud</th><th></th></tr></thead><tbody>${S.map(s => `<tr><td>${tijdNL(s.t)}</td><td>${esc(s.reden)}</td><td>${s.ruimtes} ruimtes · ${s.producten} producten</td><td class="knoppen"><button class="mini" onclick="bekijkSnap('${s.id}')">Bekijk</button><button class="mini" onclick="zetSnapTerug('${s.id}')">Terugzetten</button></td></tr>`).join('')}</tbody></table>` : '<p class="uitleg">Nog geen versies.</p>';
+  lEl.innerHTML = L.length ? `<table class="tabel historie"><thead><tr><th>Tijd</th><th>Plek</th><th>Veld</th><th>Was</th><th>Werd</th></tr></thead><tbody>${L.map(l => `<tr><td>${tijdNL(l.t)}</td><td>${esc(l.plek)}</td><td>${esc(l.veld)}</td><td>${esc(l.oud) || '<small>leeg</small>'}</td><td><b>${esc(l.nieuw) || '<small>leeg</small>'}</b></td></tr>`).join('')}</tbody></table>` : '<p class="uitleg">Nog geen maten ingetikt sinds deze functie bestaat.</p>';
+}
+async function haalSnap(id) {
+  const lokaal = await histDB.get('snaps', id).catch(() => null);
+  if (lokaal) return lokaal;
+  const j = await post({ action: 'historie_snap', id });
+  return j.snap;
+}
+async function bekijkSnap(id) {
+  const el = $('#snap-bekijk'); el.innerHTML = 'Laden…';
+  try {
+    const s = await haalSnap(id), k = JSON.parse(s.json);
+    const rijen = k.ruimtes.flatMap(ru => ru.ramen.flatMap(w => w.producten.map(p => { const r = bereken(p); return r ? `<tr><td>${esc(ru.naam)}</td><td>${esc(w.nr)}</td><td>${esc(r.t.naam)}</td><td>${(p.B || []).map(v => esc(v) || '–').join(' / ')}</td><td>${(p.H || []).map(v => esc(v) || '–').join(' / ')}</td><td><b>${fmtMaat(r)}</b></td></tr>` : ''; })));
+    el.innerHTML = `<div class="snap-weergave"><div class="snap-kop"><b>Versie van ${tijdNL(s.t)}</b> – ${esc(s.reden)} <button class="mini" onclick="this.closest('.snap-weergave').remove()">Sluiten</button></div>
+      <table class="tabel"><thead><tr><th>Ruimte</th><th>Raam</th><th>Product</th><th>Breedte strak</th><th>Hoogte strak</th><th>Bestelmaat</th></tr></thead><tbody>${rijen.join('') || '<tr><td colspan="6">Geen producten</td></tr>'}</tbody></table></div>`;
+  } catch (e) { el.innerHTML = `<p class="waarschuwing">Versie niet te laden: ${esc(e.message)}</p>`; }
+}
+async function zetSnapTerug(id) {
+  const k = huidigeKlant; if (!k) return;
+  try {
+    const s = await haalSnap(id);
+    if (!confirm(`Meting terugzetten naar de versie van ${tijdNL(s.t)}?\n\nDe huidige versie wordt eerst bewaard, dus je kunt altijd terug.`)) return;
+    await snapshot(k, 'voor terugzetten');
+    const n = JSON.parse(s.json); n.id = k.id; n.updated = Date.now(); n.syncedAt = 0; n.verwijderd = false;
+    DB.klanten[k.id] = n; huidigeKlant = n; bewaarLokaal(); planSync(); updateBadge();
+    melding(`Teruggezet naar de versie van ${tijdNL(s.t)}.`);
+    location.hash = '#/k/' + k.id;
+  } catch (e) { melding('Terugzetten mislukt: ' + e.message, true); }
 }
 
 /* ---------- synchronisatie ---------- */
@@ -1181,13 +1357,14 @@ async function sync(handmatig) {
     const j = await post({ action: 'lijst', sinds: DB.inst.laatstePull || 0 });
     for (const r of j.klanten || []) {
       const lok = DB.klanten[r.id];
-      if (!lok || (r.updated > lok.updated && lok.updated <= lok.syncedAt)) { const k = JSON.parse(r.json); k.syncedAt = k.updated; DB.klanten[k.id] = k; veranderd = true; }
+      if (!lok || (r.updated > lok.updated && lok.updated <= lok.syncedAt)) { if (lok) snapshot(lok, 'voor bijwerken vanaf ander toestel'); const k = JSON.parse(r.json); k.syncedAt = k.updated; DB.klanten[k.id] = k; veranderd = true; }
     }
     const si = j.instellingen;
     if (si && si.updated > DB.inst.updated && DB.inst.updated <= DB.inst.syncedAt) {
       DB.inst.waarden = { ...CONFIG.standaard, ...si.waarden }; DB.inst.aftrekPerType = si.aftrekPerType || {}; DB.inst.updated = DB.inst.syncedAt = si.updated; veranderd = true;
     }
     DB.inst.laatstePull = j.serverTijd || Date.now();
+    await syncHistorie();
     // nieuwe prijslijst via macro StuurCatalogus? Dan vanzelf ophalen.
     const ct = Number(j.catalogusTijd) || 0;
     if (ct && ct > (Number(localStorage.getItem('emf_cat_tijd')) || 0)) {
@@ -1222,3 +1399,4 @@ function melding(tekst, fout, ms = 4000) {
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 route();
 sync();
+setTimeout(ruimHistorieOp, 5000);

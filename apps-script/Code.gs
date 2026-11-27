@@ -64,6 +64,9 @@ function doPost(e) {
         case 'lijst': return uit(lijst(Number(d.sinds) || 0));
         case 'catalogus': return uit({ ok: true, catalogus: catalogus() });
         case 'instellingen_opslaan': bewaarInst(d.inst); return uit({ ok: true });
+        case 'historie': bewaarHistorie(d); return uit({ ok: true });
+        case 'historie_lijst': return uit(historieLijst(d.klantId));
+        case 'historie_snap': return uit({ ok: true, snap: historieSnap(d.id) });
         default: return uit({ ok: false, fout: 'Onbekende actie' });
       }
     } finally { lock.releaseLock(); }
@@ -90,6 +93,7 @@ function opslaan(k) {
   // oude JSON-stukken leegmaken
   const breedte = Math.max(sh.getLastColumn(), rij.length);
   sh.getRange(nr, 1, 1, breedte).clearContent();
+  sh.getRange(nr, 14, 1, stukken.length).setNumberFormat('@');
   sh.getRange(nr, 1, 1, rij.length).setValues([rij]);
   sh.getRange(nr, 5).setNumberFormat('@');
   // tekst in Datum-kolom houden we als tekst (yyyy-mm-dd)
@@ -307,4 +311,78 @@ function schrijfMasterTab(naam, body) {
   bereik.setNumberFormat('@'); // als tekst bewaren, zodat er niets wordt omgezet
   bereik.setValues(rijen);
   return 'OK\t' + (rijen.length - 1) + ' regels';
+}
+
+/* ---------- geschiedenis: snapshots (tab Historie) en meetlogboek (tab Meetlog) ---------- */
+const TAB_HIST = 'Historie', TAB_LOG = 'Meetlog';
+const KOP_HIST = ['id', 'klant-id', 'Klant', 'Tijd', 'Moment', 'Ruimtes', 'Producten', 'JSON'];
+const KOP_LOG = ['id', 'klant-id', 'Klant', 'Tijd', 'Plek', 'Veld', 'Was', 'Werd'];
+const BEWAAR_ALLES_DAGEN = 30;
+
+function idsVan(sh) { return sh.getLastRow() > 1 ? new Set(sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().map(r => r[0])) : new Set(); }
+
+function bewaarHistorie(d) {
+  const ss = SpreadsheetApp.getActive();
+  const sh = zorgTab(ss, TAB_HIST, KOP_HIST), sl = zorgTab(ss, TAB_LOG, KOP_LOG);
+  const hIds = idsVan(sh);
+  (d.snaps || []).forEach(s => {
+    if (!s || !s.id || hIds.has(s.id)) return;
+    const json = String(s.json || ''), stukken = [];
+    for (let i = 0; i < json.length; i += STUK) stukken.push(json.slice(i, i + STUK));
+    const rij = [s.id, s.klant, s.naam || '', new Date(s.t), s.reden || '', s.ruimtes || 0, s.producten || 0].concat(stukken);
+    const nr = sh.getLastRow() + 1;
+    if (sh.getMaxColumns() < rij.length) sh.insertColumnsAfter(sh.getMaxColumns(), rij.length - sh.getMaxColumns());
+    sh.getRange(nr, 8, 1, stukken.length || 1).setNumberFormat('@');
+    sh.getRange(nr, 1, 1, rij.length).setValues([rij]);
+  });
+  const lIds = idsVan(sl);
+  const logs = (d.logs || []).filter(l => l && l.id && !lIds.has(l.id))
+    .map(l => [l.id, l.klant, l.naam || '', new Date(l.t), l.plek || '', l.veld || '', String(l.oud == null ? '' : l.oud), String(l.nieuw == null ? '' : l.nieuw)]);
+  if (logs.length) {
+    const nr = sl.getLastRow() + 1;
+    sl.getRange(nr, 7, logs.length, 2).setNumberFormat('@');
+    sl.getRange(nr, 1, logs.length, KOP_LOG.length).setValues(logs);
+  }
+  ruimHistorieOp(sh);
+}
+
+function historieLijst(klantId) {
+  const ss = SpreadsheetApp.getActive(), uitvoer = { ok: true, snaps: [], logs: [] };
+  const sh = ss.getSheetByName(TAB_HIST);
+  if (sh && sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 7).getValues().forEach(r => {
+    if (r[1] === klantId) uitvoer.snaps.push({ id: r[0], t: r[3] instanceof Date ? r[3].getTime() : 0, reden: r[4], ruimtes: r[5], producten: r[6] });
+  });
+  const sl = ss.getSheetByName(TAB_LOG);
+  if (sl && sl.getLastRow() > 1) sl.getRange(2, 1, sl.getLastRow() - 1, 8).getValues().forEach(r => {
+    if (r[1] === klantId) uitvoer.logs.push({ id: r[0], t: r[3] instanceof Date ? r[3].getTime() : 0, plek: r[4], veld: r[5], oud: String(r[6]), nieuw: String(r[7]) });
+  });
+  return uitvoer;
+}
+
+function historieSnap(id) {
+  const sh = SpreadsheetApp.getActive().getSheetByName(TAB_HIST);
+  if (!sh || sh.getLastRow() < 2) throw new Error('Versie niet gevonden');
+  const ids = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().map(r => r[0]);
+  const i = ids.indexOf(id);
+  if (i < 0) throw new Error('Versie niet gevonden');
+  const r = sh.getRange(i + 2, 1, 1, sh.getLastColumn()).getValues()[0];
+  return { id: r[0], t: r[3] instanceof Date ? r[3].getTime() : 0, reden: r[4], ruimtes: r[5], producten: r[6], json: r.slice(7).filter(String).join('') };
+}
+
+// één keer per dag: snapshots ouder dan 30 dagen terugbrengen tot één per klant per dag
+function ruimHistorieOp(sh) {
+  const props = PropertiesService.getScriptProperties();
+  if (Date.now() - (Number(props.getProperty('HIST_OPRUIM')) || 0) < 864e5) return;
+  props.setProperty('HIST_OPRUIM', String(Date.now()));
+  if (sh.getLastRow() < 2) return;
+  const grens = Date.now() - BEWAAR_ALLES_DAGEN * 864e5, gezien = {}, weg = [];
+  sh.getRange(2, 1, sh.getLastRow() - 1, 4).getValues()
+    .map((r, i) => ({ i, klant: r[1], t: r[3] instanceof Date ? r[3].getTime() : 0 }))
+    .sort((a, b) => b.t - a.t)
+    .forEach(x => {
+      if (!x.t || x.t >= grens) return;
+      const sl = x.klant + '|' + Utilities.formatDate(new Date(x.t), 'Europe/Amsterdam', 'yyyy-MM-dd');
+      if (gezien[sl]) weg.push(x.i); else gezien[sl] = true;
+    });
+  weg.sort((a, b) => b - a).forEach(i => sh.deleteRow(i + 2));
 }
