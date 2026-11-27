@@ -24,6 +24,10 @@ for (const [k, v] of Object.entries(CONFIG.aftrekPerType)) if (DB.inst.aftrekPer
 
 let CAT = laad('emf_cat', null) || CATALOGUS_STANDAARD;
 
+// v2.5: elke meting gaat kant-en-klaar voor Excel mee naar de Sheet.
+// Eenmalig alles opnieuw versturen, zodat ook oude metingen in Excel op te halen zijn.
+if (DB.inst.excelV !== 1) { Object.values(DB.klanten).forEach(k => { k.syncedAt = 0; }); DB.inst.excelV = 1; try { localStorage.setItem('emf_klanten', JSON.stringify(DB.klanten)); localStorage.setItem('emf_inst', JSON.stringify(DB.inst)); } catch (e) {} }
+
 function bewaarLokaal() {
   try { localStorage.setItem('emf_klanten', JSON.stringify(DB.klanten)); localStorage.setItem('emf_inst', JSON.stringify(DB.inst)); }
   catch (e) { melding('Opslaan op dit toestel mislukt: ' + e.message, true); }
@@ -899,17 +903,18 @@ function exportRegels(k) {
   regels.push(['EINDE']);
   return { regels, aantalInvoer: invoer.size, aantalGord: gord.size, aantalRuimtes: ruimtes.length, problemen };
 }
+const exportTekst = ex => ex.regels.map(r => r.map(v => String(v ?? '').replace(/[\t\n\r]/g, ' ')).join('\t')).join('\n');
 async function kopieerExcel() {
   const k = huidigeKlant; const ex = exportRegels(k); const L = CAT.limieten;
   const te = [];
   if (ex.aantalInvoer > L.invoer) te.push(`${ex.aantalInvoer} productregels (Invoer heeft er ${L.invoer})`);
   if (ex.aantalGord > L.gordijnen) te.push(`${ex.aantalGord} gordijnregels (tab Gordijnen heeft er ${L.gordijnen})`);
   if (ex.aantalRuimtes > L.ruimtes) te.push(`${ex.aantalRuimtes} ruimtes (Invoer heeft er ${L.ruimtes})`);
-  const tekst = ex.regels.map(r => r.map(v => String(v ?? '').replace(/[\t\n]/g, ' ')).join('\t')).join('\n');
+  const tekst = exportTekst(ex);
   let ok = false;
   try { await navigator.clipboard.writeText(tekst); ok = true; } catch (e) {}
   if (!ok) { const ta = document.createElement('textarea'); ta.value = tekst; document.body.appendChild(ta); ta.select(); try { ok = document.execCommand('copy'); } catch (e) {} ta.remove(); }
-  let m = ok ? `Gekopieerd: ${ex.aantalInvoer} productregels, ${ex.aantalGord} gordijnen, ${ex.aantalRuimtes} ruimtes.<br>Excel: tab <b>Import</b> → cel A1 → plakken → macro <b>ImporteerMeting</b>.` : 'Kopiëren lukte niet.';
+  let m = ok ? `Gekopieerd: ${ex.aantalInvoer} productregels, ${ex.aantalGord} gordijnen, ${ex.aantalRuimtes} ruimtes.<br>Excel: tab <b>Import</b> → cel A1 → plakken → macro <b>ImporteerMeting</b>.<br>Makkelijker: in Excel macro <b>HaalMeting</b>, dan hoef je niet te plakken.` : 'Kopiëren lukte niet.';
   if (te.length) m += `<br><b>Te veel voor de offerte: ${te.join(', ')}.</b>`;
   if (ex.problemen.length) m += `<br><b>Let op:</b> ${ex.problemen.slice(0, 3).map(esc).join('<br>')}${ex.problemen.length > 3 ? '<br>…' : ''}`;
   melding(m, !ok || te.length || ex.problemen.length, 12000);
@@ -944,7 +949,7 @@ function renderInst() {
     </section>
     <section class="kaart">
       <h2>Catalogus (producten, kleurnummers, opties)</h2>
-      <p class="uitleg">Nu: ${esc(CAT.bron)} · ${Object.values(CAT.kleuren).reduce((a, f) => a + Object.keys(f).length, 0)} kleurnummers.<br>Nieuwe prijslijst? Plak de tabs Artikelen, Opties, Kleuren en Lijsten uit je master in de Google Sheet en tik hieronder.</p>
+      <p class="uitleg">Nu: ${esc(CAT.bron)} · ${Object.values(CAT.kleuren).reduce((a, f) => a + Object.keys(f).length, 0)} kleurnummers.<br>Nieuwe prijslijst? Draai in je master de macro <b>StuurCatalogus</b>. De app haalt hem daarna vanzelf op. Deze knop is alleen nodig als je de tabs met de hand in de Sheet hebt geplakt.</p>
       <div class="acties"><button class="knop" onclick="haalCatalogus()">Catalogus ophalen uit Sheet</button>${localStorage.getItem('emf_cat') ? '<button class="knop" onclick="herstelCatalogus()">Terug naar ingebouwde catalogus</button>' : ''}</div>
     </section>
     <section class="kaart">
@@ -961,16 +966,18 @@ async function testVerbinding() {
   try { const j = await post({ action: 'test' }); melding('Verbinding werkt: ' + (j.bericht || 'ok') + '. Metingen worden opgehaald…'); DB.inst.laatstePull = 0; bewaarLokaal(); sync(); }
   catch (e) { melding('Verbinding mislukt: ' + e.message, true); }
 }
-async function haalCatalogus() {
+async function haalCatalogus(stil) {
   try {
-    melding('Catalogus ophalen…');
+    if (!stil) melding('Catalogus ophalen…');
     const j = await post({ action: 'catalogus' });
     const c = j.catalogus;
     if (!c || !c.categorieen || !c.categorieen.length) throw new Error('geen catalogus gevonden in de Sheet');
     CAT = c; localStorage.setItem('emf_cat', JSON.stringify(c));
-    melding(`Catalogus bijgewerkt: ${c.categorieen.length} productgroepen, ${Object.values(c.kleuren).reduce((a, f) => a + Object.keys(f).length, 0)} kleurnummers.`);
-    route();
-  } catch (e) { melding('Catalogus ophalen mislukt: ' + e.message, true); }
+    melding(`${stil ? 'Nieuwe prijslijst binnen' : 'Catalogus bijgewerkt'}: ${c.categorieen.length} productgroepen, ${Object.values(c.kleuren).reduce((a, f) => a + Object.keys(f).length, 0)} kleurnummers.`);
+    const bezig = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+    if (!stil || !bezig) route();
+    return true;
+  } catch (e) { if (!stil) melding('Catalogus ophalen mislukt: ' + e.message, true); return false; }
 }
 function herstelCatalogus() { localStorage.removeItem('emf_cat'); CAT = CATALOGUS_STANDAARD; route(); }
 function exporteer() {
@@ -1030,6 +1037,8 @@ async function post(data) {
 }
 function metBerekening(k) {
   const c = kopie(k);
+  // kant-en-klare regels voor de Excel-macro HaalMeting
+  try { c.excel = exportTekst(exportRegels(k)); } catch (e) { c.excel = ''; }
   c.ruimtes.forEach(ru => ru.ramen.forEach(w => w.producten.forEach(p => {
     const r = bereken(p);
     p.berekend = r ? { naam: r.t.naam, cat: p.cat, calc: r.t.calc, B: r.B, H: r.H, sB: r.sB, sH: r.sH, hand: r.hand.B || r.hand.H, kleur: kleurTekst(p), pk: effPk(p), uitvoering: (parseMaat(p.montagehoogte) > 0 ? 'montagehoogte ' + parseMaat(p.montagehoogte) + ' mm · ' : '') + uitvoeringTekst(p) } : null;
@@ -1082,6 +1091,11 @@ async function sync(handmatig) {
       DB.inst.waarden = { ...CONFIG.standaard, ...si.waarden }; DB.inst.aftrekPerType = si.aftrekPerType || {}; DB.inst.updated = DB.inst.syncedAt = si.updated; veranderd = true;
     }
     DB.inst.laatstePull = j.serverTijd || Date.now();
+    // nieuwe prijslijst via macro StuurCatalogus? Dan vanzelf ophalen.
+    const ct = Number(j.catalogusTijd) || 0;
+    if (ct && ct > (Number(localStorage.getItem('emf_cat_tijd')) || 0)) {
+      if (await haalCatalogus(true)) localStorage.setItem('emf_cat_tijd', String(ct));
+    }
     bewaarLokaal(); syncFout = '';
     if (handmatig) melding('Gesynchroniseerd.');
   } catch (e) {

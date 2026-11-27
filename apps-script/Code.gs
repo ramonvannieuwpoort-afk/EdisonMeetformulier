@@ -43,9 +43,13 @@ function zorgTab(ss, naam, kop) {
 }
 
 /* ---------- web-app ---------- */
-function doGet() { return uit({ ok: true, bericht: 'Edison Meetformulier – koppeling actief' }); }
+function doGet(e) {
+  if (e && e.parameter && e.parameter.excel) return excelActie(e);
+  return uit({ ok: true, bericht: 'Edison Meetformulier – koppeling actief' });
+}
 
 function doPost(e) {
+  if (e && e.parameter && e.parameter.excel) return excelActie(e);
   try {
     const d = JSON.parse(e.postData.contents);
     const sleutel = PropertiesService.getScriptProperties().getProperty('SLEUTEL');
@@ -112,6 +116,7 @@ function lijst(sinds) {
       uitvoer.klanten.push({ id: k.id, updated: k.updated, json: json });
     });
   }
+  uitvoer.catalogusTijd = Number(PropertiesService.getScriptProperties().getProperty('CAT_TIJD')) || 0;
   const si = ss.getSheetByName(TAB_INST);
   if (si && si.getLastRow() > 1) {
     const v = si.getRange(2, 1).getValue();
@@ -188,7 +193,9 @@ function catalogus() {
   const opties = {};
   opt.forEach(r => { if (!r[0] || !r[1]) return; const o = { o: r[1], r: r[2] }; if (r[4]) o.max = Number(r[4]); if (r[7]) o.vanaf = Number(r[7]); (opties[r[0]] = opties[r[0]] || []).push(o); });
   const kleuren = {};
-  kl.forEach(r => { if (!r[0] || !r[1]) return; (kleuren[r[0]] = kleuren[r[0]] || {})[String(r[1])] = [r[2], r[3], r[4] ? Number(r[4]) : '']; });
+  // kleurnummer van 1-3 cijfers aanvullen tot 4 (zoals de app en de importmacro doen)
+  const nr = v => { const t = String(v).trim(); return /^\d{1,3}$/.test(t) ? ('0000' + t).slice(-4) : t; };
+  kl.forEach(r => { if (!r[0] || !r[1]) return; (kleuren[r[0]] = kleuren[r[0]] || {})[nr(r[1])] = [r[2], r[3], r[4] ? Number(r[4]) : '']; });
   // maximale maten uit tab Matrix (optioneel): per product en prijsklasse [[hoogte-stap, max breedte]]
   const maxm = {};
   const mx = ss.getSheetByName('Matrix');
@@ -214,4 +221,90 @@ function catalogus() {
     lijsten: { plooi: ['Enkele plooi', 'Dubbele plooi', 'Tri-plooi', 'Wave', 'Ringen'], stelstuk: kol(3), janee: kol(4), confectie: kol(5), rails: kol(6), voeren: kol(7), runners: kol(8), prijsklassen: kol(1), voering: (artikelen['Voering'] || []).map(a => a.a) },
     limieten: { invoer: 21, gordijnen: 8, ruimtes: 8 }
   };
+}
+
+/* ---------- koppeling met de offerte-Excel (macro's HaalMeting en StuurCatalogus) ----------
+   Excel praat via curl met deze web-app. Antwoord = platte tekst:
+   eerste regel "OK" (eventueel met tab + info) of "FOUT<tab>melding", daarna de gegevens.  */
+const MASTER_TABS = ['Artikelen', 'Opties', 'Kleuren', 'Lijsten'];
+const schoon = v => String(v == null ? '' : v).replace(/[\t\r\n]+/g, ' ');
+function tekstUit(s) { return ContentService.createTextOutput(s).setMimeType(ContentService.MimeType.TEXT); }
+
+function excelActie(e) {
+  const p = e.parameter;
+  try {
+    const sleutel = PropertiesService.getScriptProperties().getProperty('SLEUTEL');
+    if (!sleutel || p.key !== sleutel) return tekstUit('FOUT\tOngeldige sleutel');
+    const lock = LockService.getScriptLock();
+    lock.waitLock(20000);
+    try {
+      switch (p.excel) {
+        case 'test': return tekstUit('OK\tSheet "' + schoon(SpreadsheetApp.getActive().getName()) + '" bereikbaar');
+        case 'lijst': return tekstUit(excelLijst());
+        case 'meting': return tekstUit(excelMeting(p.id));
+        case 'tab': return tekstUit(schrijfMasterTab(p.tab, e.postData ? e.postData.contents : ''));
+        case 'catalogus_klaar': {
+          const c = catalogus();
+          PropertiesService.getScriptProperties().setProperty('CAT_TIJD', String(Date.now()));
+          const nk = Object.keys(c.kleuren).reduce((a, f) => a + Object.keys(c.kleuren[f]).length, 0);
+          return tekstUit('OK\t' + c.categorieen.length + ' productgroepen, ' + nk + ' kleurnummers');
+        }
+        default: return tekstUit('FOUT\tOnbekende actie');
+      }
+    } finally { lock.releaseLock(); }
+  } catch (err) {
+    return tekstUit('FOUT\t' + schoon(err && err.message || err));
+  }
+}
+
+function klantRijen() {
+  const sh = SpreadsheetApp.getActive().getSheetByName(TAB_KLANTEN);
+  if (!sh || sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+}
+
+// alle metingen, nieuwste eerst: id | naam | offertenr | datum | adres
+function excelLijst() {
+  const rijen = [];
+  let zonder = 0;
+  klantRijen().forEach(r => {
+    if (!r[0] || r[12] === 'ja') return;
+    const json = leesKlantRij(r); if (!json) return;
+    const k = JSON.parse(json);
+    if (k.verwijderd) return;
+    if (!k.excel) { zonder++; return; }
+    const t = r[11] instanceof Date ? r[11].getTime() : 0;
+    rijen.push({ t: t, regel: [k.id, k.naam, k.offertenr, k.datum, [k.adres, k.pcplaats].filter(String).join(', ')].map(schoon).join('\t') });
+  });
+  rijen.sort((a, b) => b.t - a.t);
+  return ['OK\t' + zonder].concat(rijen.map(x => x.regel)).join('\n');
+}
+
+function excelMeting(id) {
+  if (!id) return 'FOUT\tGeen meting gekozen';
+  const r = klantRijen().find(x => x[0] === id);
+  if (!r) return 'FOUT\tMeting niet gevonden';
+  const k = JSON.parse(leesKlantRij(r));
+  if (!k.excel) return 'FOUT\tDeze meting is nog niet bijgewerkt. Open de app even op je telefoon of laptop, dan wordt hij opnieuw verstuurd.';
+  return 'OK\n' + k.excel;
+}
+
+// een tab uit de master overnemen (tekst met tabs, niet-ASCII als %XX gecodeerd)
+function schrijfMasterTab(naam, body) {
+  if (MASTER_TABS.indexOf(naam) < 0) return 'FOUT\tOnbekend tabblad ' + schoon(naam);
+  const tekst = decodeURIComponent(body || '');
+  const rijen = tekst.split('\n').map(l => l.replace(/\r$/, '').split('\t'));
+  while (rijen.length && rijen[rijen.length - 1].every(v => v === '')) rijen.pop();
+  if (rijen.length < 2) return 'FOUT\tTabblad ' + naam + ' is leeg';
+  const kol = rijen.reduce((m, r) => Math.max(m, r.length), 0);
+  rijen.forEach(r => { while (r.length < kol) r.push(''); });
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName(naam) || ss.insertSheet(naam);
+  sh.clear();
+  if (sh.getMaxRows() < rijen.length) sh.insertRowsAfter(sh.getMaxRows(), rijen.length - sh.getMaxRows());
+  if (sh.getMaxColumns() < kol) sh.insertColumnsAfter(sh.getMaxColumns(), kol - sh.getMaxColumns());
+  const bereik = sh.getRange(1, 1, rijen.length, kol);
+  bereik.setNumberFormat('@'); // als tekst bewaren, zodat er niets wordt omgezet
+  bereik.setValues(rijen);
+  return 'OK\t' + (rijen.length - 1) + ' regels';
 }

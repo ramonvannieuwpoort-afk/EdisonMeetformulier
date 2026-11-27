@@ -64,7 +64,7 @@ De standaardwaarden synchroniseren tussen je toestellen. De URL en de sleutel vu
 ## Later: onderhoud
 
 - **Producten of opties aanpassen:** bewerk `config.js` op GitHub met het potlood-icoon. Verhoog daarna in `sw.js` de regel `VERSIE` (bijvoorbeeld `emf-1.0.1`). Zonder die stap blijven toestellen de oude versie gebruiken. Sluit de app op je telefoon daarna één keer helemaal af en open hem opnieuw.
-- **Het script aanpassen:** plak de nieuwe code en sla op. Kies dan **Implementeren → Implementaties beheren → potlood → Versie: Nieuwe versie → Implementeren**. De URL blijft hetzelfde.
+- **Het script aanpassen:** gaat automatisch zodra je `STAPPENPLAN-AUTOMATISCH.md` (deel 1) hebt gedaan. Daarvoor: plak de nieuwe code en sla op. Kies dan **Implementeren → Implementaties beheren → potlood → Versie: Nieuwe versie → Implementeren**. De URL blijft hetzelfde.
 - **Sleutel uitgelekt of telefoon kwijt:** voer in Apps Script de functie `nieuweSleutel` uit en vul de nieuwe sleutel in op je toestellen.
 - **Back-up:** via **Instellingen → Download back-up**. De Sheet is ook al een back-up.
 - **Laser met toetsenbordmodus:** tik in het eerste maatveld en meet. Na het versturen springt de cursor zelf naar het volgende veld.
