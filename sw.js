@@ -1,6 +1,6 @@
 /* Service worker: maakt de app offline beschikbaar.
    Verhoog VERSIE bij elke wijziging, zodat toestellen de nieuwe versie ophalen. */
-const VERSIE = 'emf-3.0.2';
+const VERSIE = 'emf-3.0.3';
 const BESTANDEN = ['./', 'index.html', 'style.css', 'catalogus.js', 'config.js', 'app.js', 'logo.png', 'manifest.webmanifest', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
