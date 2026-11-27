@@ -1,6 +1,6 @@
 {
-  "name": "Edison Opdrachten (winkel)",
-  "short_name": "Edison winkel",
+  "name": "Edison meten – opdrachten",
+  "short_name": "Edison meten",
   "start_url": "./winkel.html",
   "scope": "./winkel.html",
   "display": "standalone",
