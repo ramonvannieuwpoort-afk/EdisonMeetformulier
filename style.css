@@ -264,3 +264,19 @@ tr.deel-rij td { border-bottom: 1px dotted #ccc; }
 .bestel-invoer { margin: 10px 0; padding: 10px; border: 2px solid var(--beige); border-radius: 8px; background: #fff; }
 .live-som { margin-top: 8px; padding: 6px 10px; border-left: 4px solid var(--oranje); background: #fff8ee; font-size: 14px; line-height: 1.5; }
 .live-som:empty { display: none; }
+
+/* v3.0: status, offerte, winkel */
+.meet-cel { display: flex; flex-direction: column; min-width: 0; }
+.meet-cel small { font-size: 11px; color: #777; text-align: center; margin-bottom: 1px; }
+.filters button { font-size: 13px; }
+.filters button.actief { background: #222; color: #fff; border-color: #222; }
+.filters button b { margin-left: 3px; }
+li.nieuw-winkel { background: #fff8ee; }
+.st-klaargezet, .of-winkel { color: var(--oranje); font-style: normal; font-weight: bold; }
+.st-afgerond, .of-gemaakt { color: #2e7d32; font-style: normal; }
+.st-bezig, .st-nieuw, .st-gewijzigd, .of-zelf, .of-geen { font-style: normal; }
+.st-gewijzigd { color: var(--oranje); }
+.wens-kaart { border-left: 4px solid var(--oranje); }
+.wens { margin-top: 6px; }
+.offerte-keuze .radio-rij { display: flex; gap: 8px; align-items: center; padding: 6px 0; }
+.link-vak { width: 100%; font-size: 12px; }

@@ -85,6 +85,8 @@ const zijdeOpties = p => { const o = gekozenOpties(p), tdbu = o.some(isTDBU); re
 function zijdeVerplicht(p) { const o = gekozenOpties(p); return !o.some(isMotor) && !/powerview/i.test(p.art || '') && zijdeOpties(p).length > 0; }
 const optieLijst = p => { const a = artDef(p); return a && a.og ? (CAT.opties[a.og] || []) : []; };
 const gekozenOpties = p => (p.opties || []).filter(Boolean);
+// namen van de drie meetpunten
+const puntNaam = (p, as, i) => { const t = prodDef(p); return as === 'H' ? ['links', 'midden', 'rechts'][i] : (t && t.calc === 'stof' ? ['1e', '2e', '3e'][i] : ['boven', 'midden', 'onder'][i]); };
 const naastAantal = p => { const n = parseInt(p.naast, 10); return n > 1 ? n : 1; };
 // naast elkaar alleen bij raambekleding in de dag
 const alsBestel = p => p.maatSoort === 'bestel';
@@ -308,7 +310,9 @@ function uitvoeringTekst(p, deel) {
   const naast = r && r.naast ? naastTekst(r) + (r.naast.delen ? (r.naast.ongelijk ? `: links ${r.naast.delen[0]} / rechts ${r.naast.delen[1]} mm` : `: ${r.naast.n} × ${r.naast.delen[0]} mm`) : '') + ` (dag strak ${r.naast.dag})` : '';
   const plooiLater = kleurLater(p) && /duette/i.test(p.cat + ' ' + p.art) && /25\/32/.test(p.art) && 'plooihoogte volgt na kleurkeuze';
   const n = naastN(p);
-  const zijde = n > 1 ? (deel != null ? deelZijde(p, deel) && 'bediening ' + deelZijde(p, deel).toLowerCase() : Array.from({ length: n }, (_, i) => deelZijde(p, i) && `deel ${i + 1} bediening ${deelZijde(p, i).toLowerCase()}`).filter(Boolean).join(', ')) : p.zijde && 'bediening ' + p.zijde.toLowerCase();
+  const bl = i => { const v = parseMaat(i == null ? p.bedLengte : (p.naastBedLengte || [])[i]); return v > 0 ? `lengte ${v} mm` : ''; };
+  const bedTekst = (z, l) => (z || l) ? 'bediening ' + [z && z.toLowerCase(), l].filter(Boolean).join(', ') : '';
+  const zijde = n > 1 ? (deel != null ? bedTekst(deelZijde(p, deel), bl(deel)) : Array.from({ length: n }, (_, i) => { const tx = bedTekst(deelZijde(p, i), bl(i)); return tx && `deel ${i + 1} ${tx}`; }).filter(Boolean).join(', ')) : bedTekst(p.zijde, bl());
   return [deel != null ? '' : naast, kp && !kp.fout && kp.plisse && 'plissé ' + kp.plisse + ' mm', plooiLater, ...gekozenOpties(p), zijde].filter(Boolean).join(' · ');
 }
 
@@ -343,7 +347,7 @@ document.addEventListener('input', e => {
   const el = e.target;
   if (el.dataset.bind && huidigeKlant) {
     zetPad(huidigeKlant, el.dataset.bind, el.type === 'checkbox' ? el.checked : el.value);
-    gewijzigd(huidigeKlant);
+    if (/^offerte\./.test(el.dataset.bind)) offerteGewijzigd(huidigeKlant); else gewijzigd(huidigeKlant);
     if (el.dataset.live !== undefined) liveUpdate(el);
     if (el.dataset.adres !== undefined) zoekAdres(el.value);
   } else if (el.dataset.ibind) {
@@ -412,16 +416,21 @@ function kop(titel, terug) {
 /* ---------- Klantenlijst ---------- */
 function telProducten(k) { return k.ruimtes.reduce((a, r) => a + r.ramen.reduce((b, w) => b + w.producten.reduce((c, p) => c + naastN(p), 0), 0), 0); }
 function renderLijst() {
-  const lijst = Object.values(DB.klanten).filter(k => !k.verwijderd).sort((a, b) => (b.datum || '').localeCompare(a.datum || '') || b.updated - a.updated);
+  const alle = Object.values(DB.klanten).filter(k => !k.verwijderd);
+  const isNieuw = k => k.bron === 'winkel' && !k.gezien;
+  const FILTERS = { alles: ['Alles', () => true], meten: ['Nog te meten', k => !k.afgerond], offerte: ['Offerte nog maken', offerteOpen], winkel: ['Nieuw van winkel', isNieuw] };
+  const f = FILTERS[lijstFilter] ? lijstFilter : 'alles';
+  const lijst = alle.filter(FILTERS[f][1]).sort((a, b) => (isNieuw(b) - isNieuw(a)) || (b.datum || '').localeCompare(a.datum || '') || b.updated - a.updated);
   app().innerHTML = kop('Meetformulier') + `
   <main class="inhoud">
     <div class="acties">
       <button class="knop primair" onclick="maakKlant()">+ Nieuwe meting</button>
       <input type="search" placeholder="Zoek klant…" oninput="filterLijst(this.value)" class="zoek">
     </div>
+    <div class="chips filters">${Object.entries(FILTERS).map(([key, [l, fn]]) => `<button class="${key === f ? 'actief' : ''}" onclick="lijstFilter='${key}';route()">${l} <b>${alle.filter(fn).length}</b></button>`).join('')}</div>
     <ul class="lijst" id="klantlijst">
-      ${lijst.map(k => `<li data-zoek="${esc((k.naam + ' ' + k.adres + ' ' + k.pcplaats + ' ' + k.offertenr).toLowerCase())}">
-        <a href="#/k/${k.id}"><strong>${esc(k.naam || '(geen naam)')}</strong>
+      ${lijst.map(k => `<li class="${isNieuw(k) ? 'nieuw-winkel' : ''}" data-zoek="${esc((k.naam + ' ' + k.adres + ' ' + k.pcplaats + ' ' + k.offertenr).toLowerCase())}">
+        <a href="#/k/${k.id}"><strong>${isNieuw(k) ? '<span class="tag">Nieuw van winkel</span> ' : ''}${esc(k.naam || '(geen naam)')}</strong>
         <span>${esc(k.adres)} ${esc(k.pcplaats)}</span>
         <small>${datumNL(k.datum)}${k.offertenr ? ' · offerte ' + esc(k.offertenr) : ''} · ${k.ruimtes.length} ruimtes · ${telProducten(k)} producten · ${statusTekst(k)} ${k.updated > k.syncedAt ? '· <em class="niet-sync">niet gesynchroniseerd</em>' : ''}</small></a></li>`).join('') || '<li class="leeg">Nog geen metingen.</li>'}
     </ul>
@@ -433,14 +442,18 @@ function renderLijst() {
   </main>`;
   updateBadge();
 }
+let lijstFilter = 'alles';
 function filterLijst(q) { q = q.toLowerCase(); $$('#klantlijst li[data-zoek]').forEach(li => li.hidden = !li.dataset.zoek.includes(q)); }
 function maakKlant() { const k = nieuweKlant(); DB.klanten[k.id] = k; gewijzigd(k); location.hash = '#/k/' + k.id; }
 
 /* ---------- Klant ---------- */
 const RUIMTE_SNEL = ['Woonkamer', 'Keuken', 'Eetkamer', 'Slaapkamer', 'Kinderkamer', 'Werkkamer', 'Badkamer', 'Hal', 'Overloop', 'Zolder', 'Serre'];
 function renderKlant(k) {
+  if (k.bron === 'winkel' && !k.gezien) { k.gezien = Date.now(); gewijzigd(k); }
   app().innerHTML = kop(k.naam || 'Nieuwe meting', '#/') + `
   <main class="inhoud">
+    ${k.bron === 'winkel' ? `<section class="kaart wens-kaart"><b>Klaargezet door de winkel</b>${k.aangenomenDoor ? ' · ' + esc(k.aangenomenDoor) : ''}${k.gewensteDatum ? ' · gewenst ' + datumNL(k.gewensteDatum) : ''}${k.wens ? `<div class="wens">${esc(k.wens).replace(/\n/g, '<br>')}</div>` : ''}</section>` : ''}
+    ${k.afgerond ? offerteKaart(k) : ''}
     <details class="kaart" ${k.naam ? '' : 'open'}>
       <summary>Klantgegevens</summary>
       <div class="raster2">
@@ -582,9 +595,47 @@ function montagePrint(k) {
 }
 
 /* ---------- Meting afronden: alles nalopen ---------- */
+function metingStatus(k) {
+  const heeft = k.ruimtes.some(r => r.ramen.some(w => w.producten.some(p => prodDef(p))));
+  if (k.afgerond) return k.updated - k.afgerond > 3000 ? ['gewijzigd', 'gewijzigd na afronden'] : ['afgerond', `✓ afgerond ${datumNL(new Date(k.afgerond).toISOString().slice(0, 10))}`];
+  if (!heeft) return k.bron === 'winkel' ? ['klaargezet', 'klaargezet door winkel'] : ['nieuw', 'nog te meten'];
+  return ['bezig', 'bezig met meten'];
+}
+const OFFERTE = { zelf: 'Ik maak de offerte zelf', winkel: 'Offerte graag door de winkel', gemaakt: 'Offerte is gemaakt', geen: 'Geen offerte nodig (alleen meten)' };
+function offerteTekst(k) {
+  const o = k.offerte || {};
+  if (!o.keuze) return '';
+  if (o.keuze === 'gemaakt') return `offerte ${o.nr ? esc(o.nr) + ' ' : ''}gemaakt${o.door === 'winkel' ? ' door winkel' : ''}${o.verstuurd ? ' · verstuurd' : ''}`;
+  return { zelf: 'offerte: ik maak hem', winkel: 'offerte gevraagd aan winkel', geen: 'geen offerte nodig' }[o.keuze];
+}
+const offerteOpen = k => !!k.afgerond && (!k.offerte || !k.offerte.keuze || k.offerte.keuze === 'zelf' || k.offerte.keuze === 'winkel');
 function statusTekst(k) {
-  if (!k.afgerond) return '<em class="open">open</em>';
-  return k.updated - k.afgerond > 3000 ? '<em class="niet-sync">gewijzigd na afronden</em>' : `<em class="ok">✓ afgerond ${datumNL(new Date(k.afgerond).toISOString().slice(0, 10))}</em>`;
+  const [c, t] = metingStatus(k), o = offerteTekst(k);
+  return `<em class="st-${c}">${t}</em>${o ? ` · <em class="of-${(k.offerte || {}).keuze}">${o}</em>` : ''}`;
+}
+function offerteKaart(k) {
+  const o = k.offerte || (k.offerte = { keuze: '' });
+  return `<section class="kaart offerte-kaart"><h2>Offerte</h2>
+    <div class="offerte-keuze">${Object.entries(OFFERTE).map(([v, l]) => `<label class="radio-rij"><input type="radio" name="offkeuze" value="${v}" data-bind="offerte.keuze" data-rerender ${o.keuze === v ? 'checked' : ''}> ${l}</label>`).join('')}</div>
+    ${o.keuze === 'winkel' ? `<label class="veld"><span>Notitie voor de winkel</span><input data-bind="offerte.notitie" value="${esc(o.notitie || '')}" placeholder="bijv. spoed, klant wil voor de kerst"></label>` : ''}
+    ${o.keuze === 'gemaakt' ? `<div class="raster2"><label class="veld"><span>Offertenummer</span><input data-bind="offerte.nr" value="${esc(o.nr || '')}"></label>
+      <label class="veld vink-veld"><input type="checkbox" data-bind="offerte.verstuurd" ${o.verstuurd ? 'checked' : ''}> Verstuurd naar klant</label></div>
+      ${o.door === 'winkel' ? `<p class="uitleg">Gemaakt door de winkel${o.wie ? ' (' + esc(o.wie) + ')' : ''}${o.datum ? ' op ' + datumNL(o.datum) : ''}.</p>` : ''}` : ''}
+  </section>`;
+}
+// offerte-wijziging vastleggen met tijd (voor samenvoegen met wat de winkel doet)
+document.addEventListener('change', e => {
+  const el = e.target; if (!el.dataset || !/^offerte\./.test(el.dataset.bind || '') || !huidigeKlant) return;
+  const k = huidigeKlant, o = k.offerte; o.t = Date.now();
+  if (el.dataset.bind === 'offerte.keuze') { o.door = 'inmeter'; if (o.keuze === 'gemaakt') { if (!o.nr) o.nr = k.offertenr || ''; if (!o.datum) o.datum = vandaag(); } }
+  if (el.dataset.bind === 'offerte.nr' && o.nr && !k.offertenr) k.offertenr = o.nr;
+  offerteGewijzigd(k);
+}, true);
+// offerte aanpassen telt niet als 'meting gewijzigd na afronden'
+function offerteGewijzigd(k) {
+  const schoon = k.afgerond && k.updated - k.afgerond <= 3000;
+  k.updated = Date.now(); if (schoon) k.afgerond = k.updated;
+  bewaarLokaal(); planSync(); updateBadge();
 }
 function controleer(k) {
   const fout = [], aandacht = [];
@@ -629,6 +680,7 @@ function renderAfronden(k) {
     ${fout.length ? `<section class="kaart fout-kaart"><h2>Moet nog (${fout.length})</h2><ul class="checklijst">${fout.map(item).join('')}</ul></section>`
                   : `<section class="kaart ok-kaart"><h2>✓ Alles compleet</h2><p>Geen ontbrekende gegevens gevonden.</p></section>`}
     ${aandacht.length ? `<section class="kaart let-kaart"><h2>Aandachtspunten (${aandacht.length})</h2><ul class="checklijst">${aandacht.map(item).join('')}</ul></section>` : ''}
+    ${offerteKaart(k)}
     <div class="acties onder">
       <button class="knop primair" onclick="rondAf(${fout.length})">${fout.length ? 'Toch afronden' : '✓ Meting afronden'}</button>
       <a class="knop" href="#/k/${k.id}/overzicht">Overzicht &amp; print</a>
@@ -693,6 +745,8 @@ function productKaart(p, pre, sleutel, pi) {
   if (!p.opties || !Array.isArray(p.opties)) p.opties = ['', '', ''];
   if (!Array.isArray(p.naastZijde)) p.naastZijde = [];
   while (p.naastZijde.length < 4) p.naastZijde.push('');
+  if (!Array.isArray(p.naastBedLengte)) p.naastBedLengte = [];
+  while (p.naastBedLengte.length < 4) p.naastBedLengte.push('');
   const t = prodDef(p);
   const cats = CAT.categorieen.filter(c => c.modus !== 'los' || p.cat === c.naam);
   const overig = CAT.categorieen.filter(c => c.modus === 'los');
@@ -761,7 +815,7 @@ function productKaart(p, pre, sleutel, pi) {
   // maten
   if (t.calc !== 'los') {
     const [lB, lH] = t.calc === 'stof' ? ['Railbreedte', `Hoogte (${gordMigreer(p.gord).vanaf.toLowerCase()} → vloer)`] : ['Breedte', 'Hoogte'];
-    const meetrij = (label, as) => `<div class="meetrij"><span class="meetlabel">${label}</span>${[0, 1, 2].map(i => `<input data-meet data-live data-bind="${pre}.${as}.${i}" value="${esc(p[as][i])}" inputmode="decimal" placeholder="${i === 0 ? 'mm' : (i === 1 ? '2e' : '3e')}" autocomplete="off" class="meet">`).join('')}</div>`;
+    const meetrij = (label, as) => `<div class="meetrij"><span class="meetlabel">${label}</span>${[0, 1, 2].map(i => `<label class="meet-cel"><small>${puntNaam(p, as, i)}</small><input data-meet data-live data-bind="${pre}.${as}.${i}" value="${esc(p[as][i])}" inputmode="decimal" placeholder="mm" autocomplete="off" class="meet"></label>`).join('')}</div>`;
     const r = bereken(p);
     blok += `<div class="raster2">
       ${t.calc === 'zon' ? `<div class="veld"><span>Montage</span><div class="segment">
@@ -777,6 +831,8 @@ function productKaart(p, pre, sleutel, pi) {
       <label class="veld"><span>Bevestiging</span>${select(pre + '.bevestiging', CONFIG.bevestiging, p.bevestiging)}</label>
       <label class="veld"><span>Montagehoogte (mm) <b class="verplicht-ster">*</b> <small>vloer → bevestiging</small></span><input data-meet data-live data-mh data-bind="${pre}.montagehoogte" value="${esc(p.montagehoogte || '')}" inputmode="decimal" autocomplete="off" class="${parseMaat(p.montagehoogte) > 0 ? '' : 'verplicht'}"></label>
       ${t.calc === 'zon' && naastN(p) === 1 ? `<label class="veld"><span>Bedieningszijde <b class="verplicht-ster" data-zijde-ster ${zijdeVerplicht(p) ? '' : 'hidden'}>*</b> <small>(niet op offerte)</small></span>${select(pre + '.zijde', CONFIG.zijde, p.zijde, `data-live data-zijde class="${zijdeVerplicht(p) && !p.zijde ? 'verplicht' : ''}"`)}</label>` : ''}
+      ${t.calc === 'zon' && zijdeOpties(p).length && naastN(p) === 1 ? `<label class="veld"><span>Bedieningslengte (mm) <small>(niet op offerte)</small></span><input data-meet data-live data-bind="${pre}.bedLengte" value="${esc(p.bedLengte || '')}" inputmode="decimal" autocomplete="off"></label>` : ''}
+      ${t.calc === 'zon' && zijdeOpties(p).length && naastN(p) > 1 ? Array.from({ length: naastN(p) }, (_, i) => `<label class="veld"><span>Bedieningslengte deel ${i + 1} (${positie(naastN(p), i)}) <small>mm</small></span><input data-meet data-live data-bind="${pre}.naastBedLengte.${i}" value="${esc((p.naastBedLengte || [])[i] || '')}" inputmode="decimal" autocomplete="off"></label>`).join('') : ''}
       ${naastN(p) > 1 ? Array.from({ length: naastN(p) }, (_, i) => `<label class="veld"><span>Bediening deel ${i + 1} (${positie(naastN(p), i)}) <b class="verplicht-ster" data-zijde-ster ${zijdeVerplicht(p) ? '' : 'hidden'}>*</b></span>${select(`${pre}.naastZijde.${i}`, CONFIG.zijde, deelZijde(p, i), `data-live data-zijde-deel="${i}" class="${zijdeVerplicht(p) && !deelZijde(p, i) ? 'verplicht' : ''}"`)}</label>`).join('') : ''}
     </div>
     <div class="veld"><span>Ingevoerde maat is</span><div class="segment">
@@ -903,20 +959,13 @@ const alleFotos = k => k.ruimtes.flatMap(r => r.ramen.flatMap(w => w.fotos));
 
 /* ---------- Overzicht / print ---------- */
 let werkprint = false;
-function renderOverzicht(k) {
+function printbonHTML(k, opt = {}) {
+  const bijlage = !!opt.bijlage, fotos = opt.fotos !== false;
   const ruimtes = k.ruimtes.filter(r => r.ramen.some(w => w.producten.some(p => prodDef(p))));
-  const totaal = 1 + ruimtes.length + (werkprint ? 1 : 0);
+  const totaal = 1 + ruimtes.length + (bijlage ? 1 : 0);
   const kopje = (nr, sub) => `<div class="blad-kop"><img src="logo.png" alt="Edison Interieur"><div class="blad-kop-tekst"><b>${esc(k.naam)}</b> · ${esc(k.adres)}, ${esc(k.pcplaats)}${k.offertenr ? ' · Offerte ' + esc(k.offertenr) : ''}<br>${esc(sub)}</div><div class="bladnr">Blad ${nr} van ${totaal}</div></div>`;
   const voet = `<div class="blad-voet">Alle maten in mm. Maten op dit formulier zijn <b>BESTELMATEN</b>. Ingemeten ${datumNL(k.datum)}.</div>`;
-  const fouten = ruimtes.flatMap(ru => ru.ramen.flatMap(w => w.producten.map(p => bereken(p)).filter(r => r && r.waarsch.length).map(r => `${ru.naam} raam ${w.nr}: ${r.waarsch.join(' ')}`)));
-  let html = kop('Overzicht', '#/k/' + k.id) + `
-  <div class="werkbalk no-print">
-    <button class="knop primair" onclick="window.print()">Printen / PDF</button>
-    <button class="knop" onclick="kopieerExcel()">Kopieer voor Excel</button>
-    <label class="schakel"><input type="checkbox" ${werkprint ? 'checked' : ''} onchange="werkprint=this.checked;route()"> Werkprint (met bijlage gemeten maten)</label>
-    ${fouten.length ? `<div class="waarschuwing breed">⚠ ${fouten.length} product(en) met een melding:<br>${fouten.map(esc).join('<br>')}</div>` : ''}
-  </div>
-  <div class="print-houder"><div class="print">
+  let html = `<div class="print">
   <section class="blad voorblad">
     <div class="voor-kop"><img src="logo.png" alt="Edison Interieur" class="voor-logo"><div class="voor-titel">MEETFORMULIER</div></div>
     <table class="gegevens">
@@ -945,11 +994,11 @@ function renderOverzicht(k) {
             <tbody>${w.producten.filter(p => prodDef(p)).map(p => printRijen(p, bereken(p))).join('')}
             </tbody></table>
           ${w.opmerking ? `<div class="raam-opm">${esc(w.opmerking)}</div>` : ''}
-          ${w.fotos.length ? `<div class="print-fotos">${w.fotos.map(f => `<img data-foto="${f.id}" alt="">`).join('')}</div>` : ''}
+          ${fotos && w.fotos.length ? `<div class="print-fotos">${w.fotos.map(f => `<img data-foto="${f.id}" alt="">`).join('')}</div>` : ''}
         </div>`).join('')}
       ${voet}</section>`;
   });
-  if (werkprint) {
+  if (bijlage) {
     html += `<section class="blad bijlage">${kopje(totaal, 'Bijlage')}
       <h2 class="bijlage-titel">BIJLAGE – GEMETEN MATEN – NIET BESTELLEN</h2>
       <p class="bijlage-uitleg">Dit zijn de strakke (gemeten) maten. Bestel altijd op de bestelmaat van de ruimtebladen.</p>
@@ -957,7 +1006,19 @@ function renderOverzicht(k) {
       ${ruimtes.flatMap(ru => ru.ramen.flatMap(w => w.producten.map(p => [p, bereken(p)]).filter(([, r]) => r && r.t.calc !== 'los' && !r.alsBestel).map(([p, r]) => `<tr><td>${esc(ru.naam)}</td><td>${esc(w.nr)}</td><td>${esc(r.t.naam)}</td><td>${r.t.calc === 'zon' ? (p.montage === 'in' ? 'In' : 'Op') : ''}</td><td>${p.B.map(v => esc(v) || '–').join(' / ')}</td><td>${p.H.map(v => esc(v) || '–').join(' / ')}</td><td>${fmtStrak(r)}</td><td><small>${esc(r.uitB)}${r.uitH ? '<br>' + esc(r.uitH) : ''}</small></td></tr>`))).join('')}
       </tbody></table></section>`;
   }
-  html += '</div></div>';
+  return html + '</div>';
+}
+function renderOverzicht(k) {
+  const ruimtes = k.ruimtes.filter(r => r.ramen.some(w => w.producten.some(p => prodDef(p))));
+  const fouten = ruimtes.flatMap(ru => ru.ramen.flatMap(w => w.producten.map(p => bereken(p)).filter(r => r && r.waarsch.length).map(r => `${ru.naam} raam ${w.nr}: ${r.waarsch.join(' ')}`)));
+  let html = kop('Overzicht', '#/k/' + k.id) + `
+  <div class="werkbalk no-print">
+    <button class="knop primair" onclick="window.print()">Printen / PDF</button>
+    <button class="knop" onclick="kopieerExcel()">Kopieer voor Excel</button>
+    <label class="schakel"><input type="checkbox" ${werkprint ? 'checked' : ''} onchange="werkprint=this.checked;route()"> Werkprint (met bijlage gemeten maten)</label>
+    ${fouten.length ? `<div class="waarschuwing breed">⚠ ${fouten.length} product(en) met een melding:<br>${fouten.map(esc).join('<br>')}</div>` : ''}
+  </div>
+  <div class="print-houder">${printbonHTML(k, { bijlage: werkprint })}</div>`;
   app().innerHTML = html;
   schaalPrint(); laadFotos(); updateBadge();
 }
@@ -1075,6 +1136,12 @@ function renderInst() {
       <div class="acties"><button class="knop primair" onclick="testVerbinding()">Test verbinding</button><button class="knop" onclick="sync(true)">Nu synchroniseren</button></div>
     </section>
     <section class="kaart">
+      <h2>Winkel-toegang</h2>
+      <p class="uitleg">De winkel gebruikt een eigen, simpele pagina met een eigen wachtwoord. Daarmee kunnen ze alleen opdrachten klaarzetten, de lijst en printbonnen bekijken en een offerte afvinken. Je metingen kunnen ze niet wijzigen.</p>
+      <div class="acties"><button class="knop" onclick="maakWinkelToegang()">Winkel-link maken / vernieuwen</button></div>
+      <div id="winkel-link"></div>
+    </section>
+    <section class="kaart">
       <h2>Catalogus (producten, kleurnummers, opties)</h2>
       <p class="uitleg">Nu: ${esc(CAT.bron)} · ${Object.values(CAT.kleuren).reduce((a, f) => a + Object.keys(f).length, 0)} kleurnummers.<br>Nieuwe prijslijst? Draai in je master de macro <b>StuurCatalogus</b>. De app haalt hem daarna vanzelf op. Deze knop is alleen nodig als je de tabs met de hand in de Sheet hebt geplakt.</p>
       <div class="acties"><button class="knop" onclick="haalCatalogus()">Catalogus ophalen uit Sheet</button>${localStorage.getItem('emf_cat') ? '<button class="knop" onclick="herstelCatalogus()">Terug naar ingebouwde catalogus</button>' : ''}</div>
@@ -1087,6 +1154,18 @@ function renderInst() {
     </section>
   </main>`;
   updateBadge();
+}
+async function maakWinkelToegang() {
+  if (!confirm('Nieuw winkelwachtwoord maken? Een eventueel oud winkelwachtwoord werkt daarna niet meer.')) return;
+  try {
+    const j = await post({ action: 'winkel_sleutel' });
+    const link = new URL('winkel.html', location.href).href + '#koppel=' + encodeURIComponent(btoa(JSON.stringify({ url: DB.inst.url, ww: j.sleutel })));
+    $('#winkel-link').innerHTML = `<p><b>Winkelwachtwoord:</b> <code>${esc(j.sleutel)}</code></p>
+      <p class="uitleg">Open deze link één keer op de winkelcomputer. Daarna staat de koppeling erin. Deel hem alleen met collega's.</p>
+      <textarea readonly rows="3" class="link-vak" onclick="this.select()">${esc(link)}</textarea>
+      <div class="acties"><button class="knop" id="kopieer-winkel-link">Kopieer link</button></div>`;
+    $('#kopieer-winkel-link').onclick = () => navigator.clipboard.writeText(link).then(() => melding('Link gekopieerd.'), () => melding('Kopiëren lukte niet; selecteer de link en kopieer zelf.', true));
+  } catch (e) { melding('Lukt niet: ' + e.message, true); }
 }
 function zorgType(id) { if (!DB.inst.aftrekPerType[id]) DB.inst.aftrekPerType[id] = { B: '', H: '' }; }
 async function testVerbinding() {
@@ -1204,8 +1283,8 @@ function plekVan(k, pad) {
     }
   }
   const [a, b] = rest;
-  const veld = a === 'B' ? `${p && naastN(p) > 1 ? 'totale dag' : 'breedte'} (${+b + 1}e meting)` : a === 'H' ? `hoogte (${+b + 1}e meting)`
-    : a === 'hand' ? 'handmatige ' + (b === 'B' ? 'breedte' : 'hoogte') : ({ montagehoogte: 'montagehoogte', naastLinks: 'dagmaat linkerdeel', kozijndiepte: 'kozijndiepte', kleurnr: 'kleurnummer' }[a] || rest.join('.'));
+  const veld = a === 'B' ? `${p && naastN(p) > 1 ? 'totale dag' : 'breedte'} (${p ? puntNaam(p, 'B', +b) : +b + 1 + 'e'})` : a === 'H' ? `hoogte (${p ? puntNaam(p, 'H', +b) : +b + 1 + 'e'})`
+    : a === 'hand' ? 'handmatige ' + (b === 'B' ? 'breedte' : 'hoogte') : a === 'naastBedLengte' ? `bedieningslengte deel ${+b + 1}` : ({ bedLengte: 'bedieningslengte', montagehoogte: 'montagehoogte', naastLinks: 'dagmaat linkerdeel', kozijndiepte: 'kozijndiepte', kleurnr: 'kleurnummer' }[a] || rest.join('.'));
   return { plek: plek.join(' · '), veld };
 }
 function logMaat(k, el) {
@@ -1334,6 +1413,8 @@ function metBerekening(k) {
   const c = kopie(k);
   // kant-en-klare regels voor de Excel-macro HaalMeting
   try { c.excel = exportTekst(exportRegels(k)); } catch (e) { c.excel = ''; }
+  // printbon voor de winkelweergave (alleen afgeronde metingen, zonder foto's)
+  try { c.printbon = k.afgerond && !k.verwijderd ? printbonHTML(k, { fotos: false }) : ''; } catch (e) { c.printbon = ''; }
   c.ruimtes.forEach(ru => ru.ramen.forEach(w => w.producten.forEach(p => {
     const r = bereken(p);
     p.berekend = r ? { naam: r.t.naam, cat: p.cat, calc: r.t.calc, B: r.B, H: r.H, sB: r.sB, sH: r.sH, hand: r.hand.B || r.hand.H, kleur: kleurTekst(p), pk: effPk(p), uitvoering: (parseMaat(p.montagehoogte) > 0 ? 'montagehoogte ' + parseMaat(p.montagehoogte) + ' mm · ' : '') + uitvoeringTekst(p) } : null;
@@ -1379,7 +1460,19 @@ async function sync(handmatig) {
     const j = await post({ action: 'lijst', sinds: DB.inst.laatstePull || 0 });
     for (const r of j.klanten || []) {
       const lok = DB.klanten[r.id];
-      if (!lok || (r.updated > lok.updated && lok.updated <= lok.syncedAt)) { if (lok) snapshot(lok, 'voor bijwerken vanaf ander toestel'); const k = JSON.parse(r.json); k.syncedAt = k.updated; DB.klanten[k.id] = k; veranderd = true; }
+      if (!lok || (r.updated > lok.updated && lok.updated <= lok.syncedAt)) { if (lok) snapshot(lok, 'voor bijwerken vanaf ander toestel'); const k = JSON.parse(r.json); delete k.excel; delete k.printbon; k.syncedAt = k.updated; DB.klanten[k.id] = k; veranderd = true; }
+    }
+    // nieuwe opdrachten van de winkel
+    for (const o of j.opdrachten || []) {
+      if (DB.klanten[o.id]) continue;
+      const k = nieuweKlant(); Object.assign(k, { id: o.id, naam: o.naam || '', adres: o.adres || '', pcplaats: o.pcplaats || '', telefoon: o.telefoon || '', email: o.email || '', bron: 'winkel', wens: o.wens || '', aangenomenDoor: o.door || '', gewensteDatum: o.datum || '', datum: o.datum || vandaag() });
+      DB.klanten[k.id] = k; veranderd = true;
+    }
+    // offerte afgevinkt door de winkel
+    for (const st of j.winkelStatus || []) {
+      const k = DB.klanten[st.id]; if (!k) continue;
+      const o = k.offerte || {};
+      if ((o.t || 0) < st.t) { k.offerte = { ...o, keuze: 'gemaakt', nr: st.nr || o.nr || '', datum: st.datum || vandaag(), door: 'winkel', wie: st.wie || '', t: st.t }; if (st.nr && !k.offertenr) k.offertenr = st.nr; const schoon = k.afgerond && k.updated - k.afgerond <= 3000; k.updated = Date.now(); if (schoon) k.afgerond = k.updated; veranderd = true; }
     }
     const si = j.instellingen;
     if (si && si.updated > DB.inst.updated && DB.inst.updated <= DB.inst.syncedAt) {

@@ -78,3 +78,10 @@ Hier hoef je niets te doen. De app staat al op versie 2.5.0. Sluit hem op je iPh
 - **"Ongeldige sleutel":** draai **KoppelingInstellen** opnieuw en plak de sleutel uit de app (Instellingen → Koppeling Google Sheet).
 - **"Onverwacht antwoord":** de web-app-URL klopt niet. Draai **KoppelingInstellen** en controleer of de URL eindigt op `/exec`.
 - **Een meting staat niet in de lijst:** open de app op het toestel waar je hebt gemeten en wacht tot "✓ Gesynchroniseerd".
+
+## Winkel-toegang (versie 3.0)
+
+1. Open in de app **Instellingen → Winkel-toegang → Winkel-link maken / vernieuwen**.
+2. Open de link die verschijnt één keer op de winkelcomputer. Zet daar een bladwijzer op de pagina.
+3. Het winkelwachtwoord werkt alleen voor de winkelpagina: opdrachten klaarzetten, de lijst en printbonnen bekijken, en een offerte afvinken. Metingen bekijken als data, wijzigen of opslaan kan er niet mee; dat controleert het Apps Script.
+4. Wachtwoord uitgelekt of collega weg? Maak een nieuwe link. Het oude winkelwachtwoord werkt dan meteen niet meer.
