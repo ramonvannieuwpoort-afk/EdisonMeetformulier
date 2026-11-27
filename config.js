@@ -6,7 +6,7 @@
    ========================================================= */
 
 const CONFIG = {
-  versie: '3.0.0',
+  versie: '3.0.1',
 
   // Beginwaarden (aan te passen in de app onder Instellingen)
   standaard: {

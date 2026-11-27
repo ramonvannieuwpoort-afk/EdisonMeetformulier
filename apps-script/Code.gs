@@ -131,6 +131,7 @@ function lijst(sinds) {
   }
   uitvoer.opdrachten = openOpdrachten(ss);
   uitvoer.winkelStatus = laatsteWinkelStatus(ss);
+  uitvoer.winkelVerwijderd = winkelVerwijderd(ss);
   uitvoer.catalogusTijd = Number(PropertiesService.getScriptProperties().getProperty('CAT_TIJD')) || 0;
   const si = ss.getSheetByName(TAB_INST);
   if (si && si.getLastRow() > 1) {
@@ -401,8 +402,8 @@ function ruimHistorieOp(sh) {
 /* ---------- winkel: opdrachten klaarzetten, lijst, printbon, offerte afvinken ----------
    De winkel heeft een eigen wachtwoord (WINKELSLEUTEL). Daarmee kan alleen wat hieronder staat. */
 const TAB_OPDR = 'Opdrachten', TAB_WST = 'WinkelStatus', TAB_PB = 'Printbon';
-const KOP_OPDR = ['id', 'Aangemaakt', 'Door', 'Naam', 'Adres', 'Postcode/plaats', 'Telefoon', 'E-mail', 'Gewenste datum', 'Wens'];
-const KOP_WST = ['klant-id', 'Tijd', 'Offertenr', 'Door', 'Datum'];
+const KOP_OPDR = ['id', 'Aangemaakt', 'Door', 'Naam', 'Adres', 'Postcode/plaats', 'Telefoon', 'E-mail', 'Gewenste datum', 'Wens', 'Verwijderd'];
+const KOP_WST = ['klant-id', 'Tijd', 'Offertenr', 'Door', 'Datum', 'Actie'];
 const KOP_PB = ['klant-id', 'Klant', 'Bijgewerkt', 'HTML'];
 
 function nieuweWinkelSleutel() {
@@ -436,20 +437,25 @@ function openOpdrachten(ss) {
   if (!sh || sh.getLastRow() < 2) return [];
   const bekend = klantIds(ss);
   return sh.getRange(2, 1, sh.getLastRow() - 1, KOP_OPDR.length).getDisplayValues()
-    .filter(r => r[0] && !bekend.has(r[0]))
+    .filter(r => r[0] && !bekend.has(r[0]) && r[10] !== 'ja')
     .map(r => ({ id: r[0], aangemaakt: r[1], door: r[2], naam: r[3], adres: r[4], pcplaats: r[5], telefoon: r[6], email: r[7], datum: r[8], wens: r[9] }));
 }
 
-function laatsteWinkelStatus(ss) {
+function wstRijen(ss) {
   const sh = ss.getSheetByName(TAB_WST);
   if (!sh || sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, KOP_WST.length).getValues()
+    .map(r => ({ id: r[0], t: r[1] instanceof Date ? r[1].getTime() : 0, nr: String(r[2]), wie: String(r[3]), datum: String(r[4]), actie: String(r[5] || '') }))
+    .filter(x => x.id);
+}
+// laatste 'offerte gemaakt' per klant
+function laatsteWinkelStatus(ss) {
   const per = {};
-  sh.getRange(2, 1, sh.getLastRow() - 1, KOP_WST.length).getValues().forEach(r => {
-    const t = r[1] instanceof Date ? r[1].getTime() : 0;
-    if (r[0] && (!per[r[0]] || per[r[0]].t < t)) per[r[0]] = { id: r[0], t: t, nr: String(r[2]), wie: String(r[3]), datum: String(r[4]) };
-  });
+  wstRijen(ss).filter(x => !x.actie).forEach(x => { if (!per[x.id] || per[x.id].t < x.t) per[x.id] = x; });
   return Object.keys(per).map(k => per[k]);
 }
+// door de winkel verwijderde (nog niet ingemeten) opdrachten
+function winkelVerwijderd(ss) { return wstRijen(ss).filter(x => x.actie === 'verwijderd').map(x => ({ id: x.id, t: x.t })); }
 
 function winkelActie(d) {
   const ss = SpreadsheetApp.getActive();
@@ -459,12 +465,14 @@ function winkelActie(d) {
     case 'w_printbon': return { ok: true, html: winkelPrintbon(ss, d.id) };
     case 'w_opdracht': return { ok: true, id: winkelOpdracht(ss, d.opdracht || {}) };
     case 'w_offerte': winkelOfferte(ss, d); return { ok: true };
+    case 'w_verwijder': winkelVerwijder(ss, d.id); return { ok: true };
     default: return { ok: false, fout: 'Niet toegestaan met het winkelwachtwoord' };
   }
 }
 
 function winkelLijst(ss) {
   const status = {}; laatsteWinkelStatus(ss).forEach(s => { status[s.id] = s; });
+  const weg = new Set(winkelVerwijderd(ss).map(x => x.id));
   const pb = ss.getSheetByName(TAB_PB);
   const metPrintbon = pb && pb.getLastRow() > 1 ? new Set(pb.getRange(2, 1, pb.getLastRow() - 1, 1).getValues().map(r => r[0])) : new Set();
   const uit = [];
@@ -472,7 +480,7 @@ function winkelLijst(ss) {
   if (sh && sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues().forEach(r => {
     if (!r[0] || r[12] === 'ja') return;
     const json = leesKlantRij(r); if (!json) return;
-    const k = JSON.parse(json); if (k.verwijderd) return;
+    const k = JSON.parse(json); if (k.verwijderd || weg.has(k.id)) return;
     const heeft = (k.ruimtes || []).some(ru => ru.ramen.some(w => w.producten.some(p => p.cat && p.art)));
     let o = k.offerte || {};
     const ws = status[k.id];
@@ -501,8 +509,9 @@ function winkelOpdracht(ss, o) {
   const sh = zorgTab(ss, TAB_OPDR, KOP_OPDR);
   const id = 'w' + Utilities.getUuid().replace(/-/g, '').slice(0, 12);
   const nr = sh.getLastRow() + 1;
+  sh.getRange(1, 1, 1, KOP_OPDR.length).setValues([KOP_OPDR]);
   sh.getRange(nr, 1, 1, KOP_OPDR.length).setNumberFormat('@');
-  sh.getRange(nr, 1, 1, KOP_OPDR.length).setValues([[id, Utilities.formatDate(new Date(), 'Europe/Amsterdam', 'yyyy-MM-dd HH:mm'), tekst(o.door), tekst(o.naam), tekst(o.adres), tekst(o.pcplaats), tekst(o.telefoon), tekst(o.email), tekst(o.datum), tekst(o.wens)]]);
+  sh.getRange(nr, 1, 1, KOP_OPDR.length).setValues([[id, Utilities.formatDate(new Date(), 'Europe/Amsterdam', 'yyyy-MM-dd HH:mm'), tekst(o.door), tekst(o.naam), tekst(o.adres), tekst(o.pcplaats), tekst(o.telefoon), tekst(o.email), tekst(o.datum), tekst(o.wens), '']]);
   return id;
 }
 
@@ -511,6 +520,30 @@ function winkelOfferte(ss, d) {
   if (!klantIds(ss).has(d.id)) throw new Error('Klant niet gevonden');
   const sh = zorgTab(ss, TAB_WST, KOP_WST);
   const nr = sh.getLastRow() + 1;
+  sh.getRange(1, 1, 1, KOP_WST.length).setValues([KOP_WST]);
   sh.getRange(nr, 3, 1, 3).setNumberFormat('@');
-  sh.getRange(nr, 1, 1, KOP_WST.length).setValues([[d.id, new Date(), String(d.nr || '').slice(0, 50), String(d.wie || '').slice(0, 50), Utilities.formatDate(new Date(), 'Europe/Amsterdam', 'yyyy-MM-dd')]]);
+  sh.getRange(nr, 1, 1, KOP_WST.length).setValues([[d.id, new Date(), String(d.nr || '').slice(0, 50), String(d.wie || '').slice(0, 50), Utilities.formatDate(new Date(), 'Europe/Amsterdam', 'yyyy-MM-dd'), '']]);
+}
+
+// winkel mag alleen opdrachten verwijderen waar nog geen maten in staan
+function winkelVerwijder(ss, id) {
+  if (!id) throw new Error('Geen opdracht gekozen');
+  const so = ss.getSheetByName(TAB_OPDR);
+  let gevonden = false;
+  if (so && so.getLastRow() > 1) {
+    const ids = so.getRange(2, 1, so.getLastRow() - 1, 1).getValues().map(r => r[0]);
+    const i = ids.indexOf(id);
+    if (i >= 0) { so.getRange(i + 2, 11).setValue('ja'); gevonden = true; }
+  }
+  const r = klantRijen().find(x => x[0] === id);
+  if (r) {
+    const k = JSON.parse(leesKlantRij(r) || '{}');
+    const heeft = (k.ruimtes || []).some(ru => ru.ramen.some(w => w.producten.some(p => p.cat && p.art)));
+    if (heeft || k.afgerond) throw new Error('Hier zijn al maten in gezet. Vraag de inmeter om hem te verwijderen.');
+    const sh = zorgTab(ss, TAB_WST, KOP_WST);
+    sh.getRange(1, 1, 1, KOP_WST.length).setValues([KOP_WST]);
+    sh.getRange(sh.getLastRow() + 1, 1, 1, KOP_WST.length).setValues([[id, new Date(), '', '', Utilities.formatDate(new Date(), 'Europe/Amsterdam', 'yyyy-MM-dd'), 'verwijderd']]);
+    gevonden = true;
+  }
+  if (!gevonden) throw new Error('Opdracht niet gevonden');
 }

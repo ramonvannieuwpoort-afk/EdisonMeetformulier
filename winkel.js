@@ -21,6 +21,13 @@ if (location.hash.startsWith('#koppel=')) {
   history.replaceState(null, '', location.pathname);
 }
 
+// voorkomt dubbel klikken: knop uit zolang het verzoek loopt
+let bezig = false;
+async function eenKeer(knop, fn) {
+  if (bezig) return; bezig = true;
+  const oud = knop && knop.textContent; if (knop) { knop.disabled = true; knop.textContent = 'Bezig…'; }
+  try { await fn(); } finally { bezig = false; if (knop && document.body.contains(knop)) { knop.disabled = false; knop.textContent = oud; } }
+}
 async function post(data) {
   if (!W.url || !W.ww) throw new Error('Niet gekoppeld');
   const r = await fetch(W.url, { method: 'POST', body: JSON.stringify({ ...data, key: W.ww }) });
@@ -96,11 +103,12 @@ function renderKlant(k) {
       <p>${esc(k.adres)}<br>${esc(k.pcplaats)}<br>${esc(k.telefoon)}${k.email ? ' · ' + esc(k.email) : ''}</p>
       <p><b>Meting:</b> ${METING[k.meting] || ''}${k.datum ? ' · ' + datumNL(k.datum) : ''}<br><b>Offerte:</b> ${offerteLabel(k) || '–'}${o.notitie ? `<br><b>Notitie inmeter:</b> ${esc(o.notitie)}` : ''}</p>
       ${k.wens ? `<div class="wens-kaart kaart"><b>Wens klant</b>${k.door ? ' (aangenomen door ' + esc(k.door) + ')' : ''}<div class="wens">${esc(k.wens).replace(/\n/g, '<br>')}</div></div>` : ''}
-      <div class="acties">${k.printbon ? `<a class="knop primair" href="#k/${k.id}/printbon">Printbon bekijken / printen</a>` : '<span class="uitleg">Printbon komt beschikbaar zodra de meting is afgerond.</span>'}</div>
+      <div class="acties">${k.printbon ? `<a class="knop primair" href="#k/${k.id}/printbon">Printbon bekijken / printen</a>` : '<span class="uitleg">Printbon komt beschikbaar zodra de meting is afgerond.</span>'}
+        ${k.meting === 'klaargezet' || k.meting === 'nieuw' ? `<button class="knop gevaar" onclick="eenKeer(this, () => verwijderOpdracht('${k.id}'))">Opdracht verwijderen</button>` : ''}</div>
     </section>
     ${k.meting === 'afgerond' && o.keuze !== 'gemaakt' && o.keuze !== 'geen' ? `<section class="kaart"><h2>Offerte gemaakt?</h2>
       <div class="raster2"><label class="veld"><span>Offertenummer</span><input id="o-nr"></label><label class="veld"><span>Je naam</span><input id="o-wie" value="${esc(W.naam || '')}"></label></div>
-      <div class="acties"><button class="knop primair" onclick="offerteGemaakt('${k.id}')">✓ Offerte gemaakt</button></div></section>` : ''}
+      <div class="acties"><button class="knop primair" onclick="eenKeer(this, () => offerteGemaakt('${k.id}'))">✓ Offerte gemaakt</button></div></section>` : ''}
   </main>`;
 }
 async function offerteGemaakt(id) {
@@ -111,6 +119,12 @@ async function offerteGemaakt(id) {
   catch (e) { melding('Opslaan mislukt: ' + e.message, true); }
 }
 
+async function verwijderOpdracht(id) {
+  const k = KLANTEN.find(x => x.id === id);
+  if (!confirm(`Opdracht ${k ? k.naam : ''} verwijderen?`)) return;
+  try { await post({ action: 'w_verwijder', id }); melding('Opdracht verwijderd.'); location.hash = ''; await haalLijst(); }
+  catch (e) { melding('Verwijderen mislukt: ' + e.message, true); }
+}
 async function renderPrintbon(k) {
   app().innerHTML = kop('Printbon ' + (k.naam || ''), '#k/' + k.id) + `<div class="werkbalk no-print"><button class="knop primair" onclick="window.print()">Printen / PDF</button></div><div class="print-houder" id="pb">Laden…</div>`;
   try {
@@ -143,7 +157,7 @@ function renderNieuw() {
       <label class="veld"><span>Aangenomen door</span><input id="n-door" value="${esc(W.naam || '')}"></label>
     </div>
     <label class="veld"><span>Wens van de klant</span><textarea id="n-wens" rows="4" placeholder="bijv. duette slaapkamer, kleur 0260; vitrage woonkamer"></textarea></label>
-    <div class="acties"><button class="knop primair" onclick="maakOpdracht()">Opdracht klaarzetten</button></div>
+    <div class="acties"><button class="knop primair" onclick="eenKeer(this, maakOpdracht)">Opdracht klaarzetten</button></div>
   </section></main>`;
 }
 let adresTimer = null;

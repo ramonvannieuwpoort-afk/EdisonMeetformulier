@@ -1468,6 +1468,12 @@ async function sync(handmatig) {
       const k = nieuweKlant(); Object.assign(k, { id: o.id, naam: o.naam || '', adres: o.adres || '', pcplaats: o.pcplaats || '', telefoon: o.telefoon || '', email: o.email || '', bron: 'winkel', wens: o.wens || '', aangenomenDoor: o.door || '', gewensteDatum: o.datum || '', datum: o.datum || vandaag() });
       DB.klanten[k.id] = k; veranderd = true;
     }
+    // door de winkel verwijderd (alleen als er nog geen maten in staan)
+    for (const st of j.winkelVerwijderd || []) {
+      const k = DB.klanten[st.id]; if (!k || k.verwijderd || k.afgerond) continue;
+      if (k.ruimtes.some(r => r.ramen.some(w => w.producten.some(p => prodDef(p))))) continue;
+      snapshot(k, 'voor verwijderen door winkel'); k.verwijderd = true; k.updated = Date.now(); veranderd = true;
+    }
     // offerte afgevinkt door de winkel
     for (const st of j.winkelStatus || []) {
       const k = DB.klanten[st.id]; if (!k) continue;
