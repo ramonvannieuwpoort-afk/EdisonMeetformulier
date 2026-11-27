@@ -42,6 +42,9 @@ jobs:
           SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
           DEPLOYMENT_ID: ${{ secrets.DEPLOYMENT_ID }}
         run: |
+          # hele URL of ID met spaties geplakt? Dan alleen het ID gebruiken
+          DEPLOYMENT_ID=$(printf '%s' "$DEPLOYMENT_ID" | tr -d '[:space:]' | sed -E 's#^.*/s/([^/]+)(/.*)?$#\1#')
+          SCRIPT_ID=$(printf '%s' "$SCRIPT_ID" | tr -d '[:space:]')
           npm install -g @google/clasp@2.4.2
           printf '%s' "$CLASPRC" > ~/.clasprc.json
           printf '{"scriptId":"%s","rootDir":"."}' "$SCRIPT_ID" > .clasp.json
