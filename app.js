@@ -85,6 +85,9 @@ const zijdeOpties = p => { const o = gekozenOpties(p), tdbu = o.some(isTDBU); re
 function zijdeVerplicht(p) { const o = gekozenOpties(p); return !o.some(isMotor) && !/powerview/i.test(p.art || '') && zijdeOpties(p).length > 0; }
 const optieLijst = p => { const a = artDef(p); return a && a.og ? (CAT.opties[a.og] || []) : []; };
 const gekozenOpties = p => (p.opties || []).filter(Boolean);
+const naastAantal = p => { const n = parseInt(p.naast, 10); return n > 1 ? n : 1; };
+const kleurLater = p => !!p.kleurLater && !String(p.kleurnr || '').trim() && !String(p.kleur || '').trim();
+const KLEUR_LATER = 'KLEUR NOG KIEZEN – klant kiest in de winkel';
 const effPk = p => { if (p.pk) return p.pk; const k = kleurInfo(p); return k && !k.fout ? k.pk : ''; };
 
 /* ---------- gordijnen ---------- */
@@ -148,7 +151,8 @@ function bereken(p) {
   // kleur / prijsklasse
   if (t.art.fam) {
     const k = kleurInfo(p);
-    if (!p.kleurnr) r.waarsch.push('Kleurnummer ontbreekt.');
+    if (kleurLater(p)) { if (!p.pk) r.waarsch.push('Klant kiest kleur later: kies een prijsklasse, anders kan Excel geen prijs maken.'); }
+    else if (!p.kleurnr) r.waarsch.push('Kleurnummer ontbreekt.');
     else if (k.fout && !p.pk) r.waarsch.push(`Kleurnummer ${k.nr} bestaat niet voor ${t.naam}.`);
   }
   const pk = effPk(p);
@@ -195,7 +199,29 @@ function bereken(p) {
   } else if (p.montage === 'in') {
     const aB = eff(p, 'aftrekB'), aH = eff(p, 'aftrekH');
     r.params = [['aftrekB', 'Aftrek breedte', aB], ['aftrekH', 'Aftrek hoogte', aH]];
-    if (sB != null) { r.B = sB - aB.v; r.uitB = `${sB} − ${aB.v} aftrek = ${r.B}`; }
+    const n = t.calc === 'zon' ? naastAantal(p) : 1;
+    if (n === 1) {
+      if (sB != null) { r.B = sB - aB.v; r.uitB = `${sB} − ${aB.v} aftrek = ${r.B}`; }
+    } else if (sB != null) {
+      // n stuks naast elkaar in één dag: n + 1 kiertjes van elk de halve aftrek
+      const kier = aB.v / 2, mm = v => String(Math.round(v * 10) / 10).replace('.', ',');
+      const ongelijk = n === 2 && p.naastIndeling === 'ongelijk';
+      r.naast = { n, dag: sB, kier, ongelijk };
+      if (!ongelijk) {
+        const per = Math.floor((sB - (n + 1) * kier) / n);
+        r.B = per; r.naast.delen = Array(n).fill(per);
+        r.uitB = `dag ${sB} − ${n + 1} kiertjes × ${mm(kier)} = ${mm(sB - (n + 1) * kier)} → ${n} × ${per}`;
+      } else {
+        const L = parseMaat(p.naastLinks);
+        if (!(L > 0)) r.waarsch.push('Ongelijke delen: vul de dagmaat (strak) van het linkerdeel in.');
+        else if (L >= sB) r.waarsch.push(`Linkerdeel (${L}) is breder dan de hele dag (${sB}).`);
+        else {
+          const links = Math.floor(L - 1.5 * kier), rechts = Math.floor(sB - L - 1.5 * kier);
+          r.naast.L = L; r.naast.delen = [links, rechts]; r.B = Math.max(links, rechts);
+          r.uitB = `links ${L} − ${mm(1.5 * kier)} = ${links} · rechts ${sB - L} − ${mm(1.5 * kier)} = ${rechts} (3 kiertjes × ${mm(kier)})`;
+        }
+      }
+    }
     if (sH != null) { r.H = sH - aH.v; r.uitH = `${sH} − ${aH.v} aftrek = ${r.H}`; }
   } else {
     const oB = eff(p, 'overmaatB'), oH = eff(p, 'overmaatH');
@@ -206,7 +232,7 @@ function bereken(p) {
   r.params.forEach(([k, l, e]) => { if (e.afw) r.afwijkend.push(`${l} ${e.v} (std ${e.std})`); });
   ['B', 'H'].forEach(k => {
     const hv = parseMaat(p.hand && p.hand[k]);
-    if (hv > 0) { const oud = r[k]; r[k] = hv; r.hand[k] = true; r['uit' + k] = `HANDMATIG ${hv}` + (oud != null ? ` (berekend was ${oud})` : ''); }
+    if (hv > 0) { const oud = r[k]; r[k] = hv; r.hand[k] = true; r['uit' + k] = `HANDMATIG ${hv}` + (oud != null ? ` (berekend was ${oud})` : ''); if (k === 'B' && r.naast) { r.naast.delen = Array(r.naast.n).fill(hv); r.naast.ongelijk = false; r['uitB'] += ` · ${r.naast.n} × ${hv}`; } }
   });
   if ((r.hand.B || r.hand.H) && !(p.hand.reden || '').trim()) r.waarsch.push('Reden voor handmatige bestelmaat ontbreekt.');
   if (!(parseMaat(p.montagehoogte) > 0)) r.waarsch.push('Montagehoogte ontbreekt (verplicht).');
@@ -229,9 +255,16 @@ function bereken(p) {
   if (t.calc === 'zon' && p.montage === 'in' && (mB.length === 1 || mH.length === 1)) r.info = '1 meting – 3-puntsmeting aanbevolen';
   return r;
 }
-const fmtMaat = r => !r ? '—' : r.t.calc === 'los' ? '' : `${r.B ?? '—'} × ${r.H ?? '—'}`;
+const fmtMaat = r => {
+  if (!r) return '—'; if (r.t.calc === 'los') return '';
+  if (r.naast && r.naast.delen) return r.naast.ongelijk ? `L ${r.naast.delen[0]} × ${r.H ?? '—'} · R ${r.naast.delen[1]} × ${r.H ?? '—'}` : `${r.naast.n} × (${r.B} × ${r.H ?? '—'})`;
+  return `${r.B ?? '—'} × ${r.H ?? '—'}`;
+};
+const naastTekst = r => r && r.naast ? `${r.naast.n} stuks naast elkaar in één dag${r.naast.ongelijk ? ' (ongelijk)' : ''}` : '';
+const dagStrakTekst = r => r && r.naast ? `Totale dagmaat GEMETEN (strak) – niet bestellen: B ${r.naast.dag}${r.naast.L ? ` · linkerdeel ${r.naast.L}` : ''}` : '';
 const fmtStrak = r => !r ? '—' : r.t.calc === 'los' ? '' : `${r.sB ?? '—'} × ${r.sH ?? '—'}`;
 function kleurTekst(p) {
+  if (kleurLater(p)) return KLEUR_LATER;
   const k = kleurInfo(p);
   if (k && !k.fout) return `${k.nr} ${k.kwaliteit}`;
   return [p.kleurnr, p.kleur].filter(Boolean).join(' ');
@@ -244,8 +277,10 @@ function uitvoeringTekst(p) {
     const afw = g.afwerking === 'vrij' ? `vrij: ${g.basis === 'lang' ? 'langste' : 'kortste'} ${g.correctie || ''} mm` : AFWERKING[g.afwerking].toLowerCase();
     return [g.laag && g.laag.toLowerCase(), ind, g.plooi, afw, 'gemeten vanaf ' + g.vanaf.toLowerCase(), g.voering && 'voering ' + g.voering + (g.voeringkleur ? ' ' + g.voeringkleur : ''), g.voering && g.voeren === 'Los' && 'los gevoerd', g.loodkoord === 'Ja' && 'loodkoord', g.instomen === 'Ja' && 'instomen', g.rails !== 'Geen' && g.rails, g.runners, g.bochten && g.bochten + ' bocht(en)'].filter(Boolean).join(' · ');
   }
-  const kp = kleurInfo(p);
-  return [kp && !kp.fout && kp.plisse && 'plissé ' + kp.plisse + ' mm', ...gekozenOpties(p), p.zijde && 'bediening ' + p.zijde.toLowerCase()].filter(Boolean).join(' · ');
+  const kp = kleurInfo(p), r = bereken(p);
+  const naast = r && r.naast ? naastTekst(r) + (r.naast.delen ? (r.naast.ongelijk ? `: links ${r.naast.delen[0]} / rechts ${r.naast.delen[1]} mm` : `: ${r.naast.n} × ${r.naast.delen[0]} mm`) : '') + ` (dag strak ${r.naast.dag})` : '';
+  const plooiLater = kleurLater(p) && /duette/i.test(p.cat + ' ' + p.art) && /25\/32/.test(p.art) && 'plooihoogte volgt na kleurkeuze';
+  return [naast, kp && !kp.fout && kp.plisse && 'plissé ' + kp.plisse + ' mm', plooiLater, ...gekozenOpties(p), p.zijde && 'bediening ' + p.zijde.toLowerCase()].filter(Boolean).join(' · ');
 }
 
 /* ---------- router ---------- */
@@ -325,6 +360,7 @@ function liveUpdate(el) {
   $$('[data-par]', kaart).forEach(inp => inp.classList.toggle('afwijkend', eff(p, inp.dataset.par).afw));
   $$('[data-zijde]', kaart).forEach(sel => sel.classList.toggle('verplicht', zijdeVerplicht(p) && !p.zijde));
   $$('[data-zijde-ster]', kaart).forEach(st => st.hidden = !zijdeVerplicht(p));
+  $$('[data-bind$=".naastLinks"]', kaart).forEach(inp => inp.classList.toggle('verplicht', !(parseMaat(p.naastLinks) > 0)));
   $$('[data-mh]', kaart).forEach(inp => inp.classList.toggle('verplicht', !(parseMaat(p.montagehoogte) > 0)));
 }
 
@@ -635,13 +671,15 @@ function productKaart(p, pre, sleutel, pi) {
   // kleur
   if (t.modus === 'zon') {
     blok += `<div class="raster2">
-      ${a.fam ? `<label class="veld"><span>Kleurnummer</span><input data-kleur data-live data-bind="${pre}.kleurnr" value="${esc(p.kleurnr)}" inputmode="numeric" autocomplete="off" placeholder="bijv. 0260"></label>`
+      ${kleurLater(p) ? `<div class="veld"><span>Kleur</span><div class="kleur-later">${KLEUR_LATER}</div></div>`
+        : a.fam ? `<label class="veld"><span>Kleurnummer</span><input data-kleur data-live data-bind="${pre}.kleurnr" value="${esc(p.kleurnr)}" inputmode="numeric" autocomplete="off" placeholder="bijv. 0260"></label>`
                : `<label class="veld"><span>Kleur</span><input data-bind="${pre}.kleur" value="${esc(p.kleur)}"></label>`}
       <label class="veld"><span>Prijsklasse ${a.fam ? '<small>(leeg = via kleurnummer)</small>' : ''}</span>${select(pre + '.pk', (a.pk || '').split(',').map(s => s.trim()).filter(Boolean), p.pk, 'data-live', a.fam ? 'automatisch' : '—')}</label>
-    </div><div class="kleur-info">${kleurInfoHTML(p)}</div>`;
+    </div>${kleurLaterVink(p, pre)}<div class="kleur-info">${kleurInfoHTML(p)}</div>`;
 
   } else if (t.modus === 'gordijn') {
-    blok += `<label class="veld"><span>Kleur(nummer)</span><input data-bind="${pre}.kleur" value="${esc(p.kleur)}"></label>`;
+    blok += kleurLater(p) ? `<div class="veld"><span>Kleur</span><div class="kleur-later">${KLEUR_LATER}</div></div>` : `<label class="veld"><span>Kleur(nummer)</span><input data-bind="${pre}.kleur" value="${esc(p.kleur)}"></label>`;
+    blok += kleurLaterVink(p, pre);
   }
   // opties
   if (t.modus === 'zon') {
@@ -690,13 +728,19 @@ function productKaart(p, pre, sleutel, pi) {
         <label><input type="radio" name="m${sleutel}" value="in" data-bind="${pre}.montage" data-rerender ${p.montage === 'in' ? 'checked' : ''}> In de dag</label>
         <label><input type="radio" name="m${sleutel}" value="op" data-bind="${pre}.montage" data-rerender ${p.montage === 'op' ? 'checked' : ''}> Op de dag</label>
       </div></div>` : ''}
+      ${t.calc === 'zon' && p.montage === 'in' ? `<label class="veld"><span>Naast elkaar in deze dag <small>(1 = gewoon)</small></span>${select(pre + '.naast', ['1', '2', '3', '4'], String(naastAantal(p)), 'data-rerender', null)}</label>` : ''}
+      ${t.calc === 'zon' && p.montage === 'in' && naastAantal(p) === 2 ? `<div class="veld"><span>Verdeling</span><div class="segment">
+        <label><input type="radio" name="n${sleutel}" value="gelijk" data-bind="${pre}.naastIndeling" data-rerender ${p.naastIndeling !== 'ongelijk' ? 'checked' : ''}> Gelijk (naad in het midden)</label>
+        <label><input type="radio" name="n${sleutel}" value="ongelijk" data-bind="${pre}.naastIndeling" data-rerender ${p.naastIndeling === 'ongelijk' ? 'checked' : ''}> Ongelijk</label>
+      </div></div>` : ''}
+      ${t.calc === 'zon' && p.montage === 'in' && naastAantal(p) === 2 && p.naastIndeling === 'ongelijk' ? `<label class="veld"><span>Dagmaat linkerdeel (strak, mm) <b class="verplicht-ster">*</b> <small>linkerkant dag → naad</small></span><input data-meet data-live data-bind="${pre}.naastLinks" value="${esc(p.naastLinks || '')}" inputmode="decimal" autocomplete="off" class="${parseMaat(p.naastLinks) > 0 ? '' : 'verplicht'}"></label>` : ''}
       <label class="veld"><span>Bevestiging</span>${select(pre + '.bevestiging', CONFIG.bevestiging, p.bevestiging)}</label>
       <label class="veld"><span>Montagehoogte (mm) <b class="verplicht-ster">*</b> <small>vloer → bevestiging</small></span><input data-meet data-live data-mh data-bind="${pre}.montagehoogte" value="${esc(p.montagehoogte || '')}" inputmode="decimal" autocomplete="off" class="${parseMaat(p.montagehoogte) > 0 ? '' : 'verplicht'}"></label>
       ${t.calc === 'zon' ? `<label class="veld"><span>Bedieningszijde <b class="verplicht-ster" data-zijde-ster ${zijdeVerplicht(p) ? '' : 'hidden'}>*</b> <small>(niet op offerte)</small></span>${select(pre + '.zijde', CONFIG.zijde, p.zijde, `data-live data-zijde class="${zijdeVerplicht(p) && !p.zijde ? 'verplicht' : ''}"`)}</label>` : ''}
     </div>
     <div class="strak-blok">
       <div class="strak-titel">GEMETEN (strak) – niet bestellen <small>mm · ${t.calc === 'zon' && p.montage === 'in' ? '3-puntsmeting aanbevolen, kleinste telt' : 'kleinste telt'}</small></div>
-      ${meetrij(lB, 'B')}${meetrij(lH, 'H')}
+      ${meetrij(t.calc === 'zon' && p.montage === 'in' && naastAantal(p) > 1 ? 'Totale dag' : lB, 'B')}${meetrij(lH, 'H')}
     </div>
     <details class="correcties"><summary>Correcties (standaard ingevuld)</summary>
       <div class="raster2">${r.params.map(([key, label, e]) => `<label class="veld"><span>${label} (mm)</span><input data-par="${key}" data-live data-bind="${pre}.par.${key}" value="${esc(p.par[key] ?? '')}" placeholder="standaard ${e.std}" inputmode="decimal" class="${e.afw ? 'afwijkend' : ''}"></label>`).join('')}</div>
@@ -723,6 +767,10 @@ function productKaart(p, pre, sleutel, pi) {
   return `<section class="kaart product" data-prod="${sleutel}">${kop}${blok}</section>`;
 }
 function zetLoodkoord(pre, aan) { zetPad(huidigeKlant, pre + '.gord.loodkoord', aan ? 'Ja' : 'Nee'); gewijzigd(huidigeKlant); }
+function kleurLaterVink(p, pre) {
+  if (String(p.kleurnr || '').trim() || String(p.kleur || '').trim()) return '';
+  return `<label class="veld vink-veld"><input type="checkbox" data-bind="${pre}.kleurLater" data-rerender ${p.kleurLater ? 'checked' : ''}> Klant kiest kleur later (in de winkel)</label>`;
+}
 function kleurInfoHTML(p) {
   const k = kleurInfo(p);
   if (!k) return '';
@@ -739,6 +787,7 @@ function resultaatHTML(p) {
   return `<div class="bestel ${r.hand.B || r.hand.H ? 'hand' : ''}">
       <div class="bestel-label">BESTELMAAT <small>mm</small>${r.hand.B || r.hand.H ? ' <span class="tag">handmatig</span>' : ''}</div>
       <div class="bestel-maat">${fmtMaat(r)}</div>
+      ${r.naast ? `<div class="bestel-naast">${esc(naastTekst(r))}</div>` : ''}
       <div class="bestel-uitleg">${esc(r.uitB)}${r.uitH ? '<br>' + esc(r.uitH) : ''}</div>
     </div>${meldingen}`;
 }
@@ -833,8 +882,8 @@ function renderOverzicht(k) {
             <tbody>${w.producten.filter(p => prodDef(p)).map(p => { const r = bereken(p); return `
               <tr><td><b>${esc(r.t.naam)}</b><br><small>${esc(p.cat)}</small>${p.plaatsen === 'Nee' ? '<br><small>klant plaatst zelf</small>' : ''}</td>
                 <td>${r.t.calc === 'zon' ? (p.montage === 'in' ? 'In de dag' : 'Op de dag') : ''}${p.bevestiging ? '<br><small>' + esc(p.bevestiging) + '</small>' : ''}${r.t.calc !== 'los' ? (parseMaat(p.montagehoogte) > 0 ? '<br><small>Mh ' + parseMaat(p.montagehoogte) + ' mm</small>' : '<br><small class="fout">Mh ontbreekt</small>') : ''}</td>
-                <td class="kol-bestel">${r.t.calc === 'los' ? `${esc(p.aantal)}×` : `<span class="bestel-print">${fmtMaat(r)}</span>`}${r.hand.B || r.hand.H ? '<br><span class="tag">handmatig: ' + esc(p.hand.reden || 'geen reden') + '</span>' : ''}${r.afwijkend.length ? '<br><small class="afw">afwijkend: ' + esc(r.afwijkend.join(', ')) + '</small>' : ''}</td>
-                <td>${esc(kleurTekst(p))}${effPk(p) ? '<br><small>' + esc(effPk(p)) + '</small>' : ''}</td>
+                <td class="kol-bestel">${r.t.calc === 'los' ? `${esc(p.aantal)}×` : (r.naast && r.naast.delen ? (r.naast.ongelijk ? `<span class="bestel-print klein">L ${r.naast.delen[0]} × ${r.H ?? '—'}</span><br><span class="bestel-print klein">R ${r.naast.delen[1]} × ${r.H ?? '—'}</span>` : `<span class="bestel-print klein">${r.naast.n} × (${r.B} × ${r.H ?? '—'})</span>`) : `<span class="bestel-print">${fmtMaat(r)}</span>`)}${r.naast ? `<br><b>${esc(naastTekst(r))}</b><div class="dag-strak">${esc(dagStrakTekst(r))}</div>` : ''}${r.hand.B || r.hand.H ? '<br><span class="tag">handmatig: ' + esc(p.hand.reden || 'geen reden') + '</span>' : ''}${r.afwijkend.length ? '<br><small class="afw">afwijkend: ' + esc(r.afwijkend.join(', ')) + '</small>' : ''}</td>
+                <td>${kleurLater(p) ? `<b class="kleur-later">${KLEUR_LATER}</b>` : esc(kleurTekst(p))}${effPk(p) ? '<br><small>' + esc(effPk(p)) + '</small>' : ''}</td>
                 <td><small>${esc(uitvoeringTekst(p))}${p.opmerking ? '<br><i>' + esc(p.opmerking) + '</i>' : ''}</small></td></tr>
               ${r.t.calc !== 'los' ? `<tr class="strak-rij no-print"><td colspan="5"><button class="mini" onclick="this.parentNode.classList.toggle('open')">Toon gemeten maten</button>
                 <span class="strak-detail">GEMETEN – NIET BESTELLEN: ${fmtStrak(r)} mm · ${esc(r.uitB)}${r.uitH ? ' · ' + esc(r.uitH) : ''}</span></td></tr>` : ''}`; }).join('')}
@@ -891,8 +940,9 @@ function exportRegels(k) {
         const s = JSON.stringify(rij); gord.set(s, { rij, n: (gord.get(s)?.n || 0) + 1 });
       } else {
         const rij = [ru.naam, p.cat, p.art, r.t.art.fam ? normKleur(p.kleurnr) : '', r.t.calc === 'los' ? '' : (r.B ?? ''), r.t.calc === 'los' ? '' : (r.H ?? ''), p.pk || '', p.opties[0] || '', p.opties[1] || '', p.opties[2] || '', r.t.modus === 'los' ? '' : p.plaatsen];
-        const n = r.t.calc === 'los' ? (Number(p.aantal) || 1) : 1;
-        const s = JSON.stringify(rij); invoer.set(s, { rij, n: (invoer.get(s)?.n || 0) + n });
+        const zet = (rij, n) => { const s = JSON.stringify(rij); invoer.set(s, { rij, n: (invoer.get(s)?.n || 0) + n }); };
+        if (r.naast && r.naast.delen && r.naast.ongelijk) r.naast.delen.forEach(b => { const d = rij.slice(); d[4] = b; zet(d, 1); });
+        else zet(rij, r.t.calc === 'los' ? (Number(p.aantal) || 1) : (r.naast && r.naast.delen ? r.naast.n : 1));
       }
     }));
     if (heeft) ruimtes.push(ru.naam);
