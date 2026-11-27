@@ -261,3 +261,6 @@ tr.deel-rij td { border-bottom: 1px dotted #ccc; }
 .snap-kop { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .rij-knop { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 4px; }
 #melding .mini { margin-left: 10px; }
+.bestel-invoer { margin: 10px 0; padding: 10px; border: 2px solid var(--beige); border-radius: 8px; background: #fff; }
+.live-som { margin-top: 8px; padding: 6px 10px; border-left: 4px solid var(--oranje); background: #fff8ee; font-size: 14px; line-height: 1.5; }
+.live-som:empty { display: none; }

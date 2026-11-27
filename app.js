@@ -87,7 +87,8 @@ const optieLijst = p => { const a = artDef(p); return a && a.og ? (CAT.opties[a.
 const gekozenOpties = p => (p.opties || []).filter(Boolean);
 const naastAantal = p => { const n = parseInt(p.naast, 10); return n > 1 ? n : 1; };
 // naast elkaar alleen bij raambekleding in de dag
-const naastActief = p => { const t = prodDef(p); return !!t && t.calc === 'zon' && p.montage === 'in' && naastAantal(p) > 1; };
+const alsBestel = p => p.maatSoort === 'bestel';
+const naastActief = p => { const t = prodDef(p); return !!t && t.calc === 'zon' && p.montage === 'in' && naastAantal(p) > 1 && !alsBestel(p); };
 const naastN = p => naastActief(p) ? naastAantal(p) : 1;
 const POSITIES = { 2: ['links', 'rechts'], 3: ['links', 'midden', 'rechts'], 4: ['links', 'midden-links', 'midden-rechts', 'rechts'] };
 const positie = (n, i) => (POSITIES[n] || [])[i] || String(i + 1);
@@ -181,7 +182,12 @@ function bereken(p) {
   const mB = metingen(p.B), mH = metingen(p.H);
   const sB = mB.length ? Math.min(...mB) : null, sH = mH.length ? Math.min(...mH) : null;
   r.sB = sB; r.sH = sH;
-  if (t.calc === 'stof') {
+  if (alsBestel(p)) {
+    // inmeter heeft zelf de bestelmaat (blijvende maat) ingevoerd: niets afhalen of optellen
+    r.sB = null; r.sH = null; r.alsBestel = true;
+    if (sB != null) { r.B = sB; r.uitB = `${sB} ingevoerd als bestelmaat (app rekent niets)`; }
+    if (sH != null) { r.H = sH; r.uitH = `${sH} ingevoerd als bestelmaat (app rekent niets)`; }
+  } else if (t.calc === 'stof') {
     const g = gordMigreer(p.gord);
     const ov = eff(p, 'overlap');
     r.params = [['overlap', 'Overlap', ov]];
@@ -379,6 +385,7 @@ function liveUpdate(el) {
   const kaart = el.closest('[data-prod]'); if (!kaart) return;
   const [w, pi] = prodVan(kaart.dataset.prod); const p = w.producten[pi];
   const res = $('.resultaat', kaart); if (res) res.innerHTML = resultaatHTML(p);
+  const ls = $('[data-livesom]', kaart); if (ls) ls.innerHTML = liveSomHTML(p);
   // laag van een gordijn beïnvloedt de vitrage op hetzelfde raam
   if (el.dataset.bind && /\.gord\.laag$/.test(el.dataset.bind)) $$('[data-prod]').forEach(kk => { if (kk !== kaart) { const [w2, pi2] = prodVan(kk.dataset.prod); const r2 = $('.resultaat', kk); if (r2) r2.innerHTML = resultaatHTML(w2.producten[pi2]); } });
   $$('[data-bind$=".gord.laag"]', kaart).forEach(sel => sel.classList.toggle('verplicht', sel.classList.contains('verplicht') && !p.gord.laag));
@@ -761,22 +768,27 @@ function productKaart(p, pre, sleutel, pi) {
         <label><input type="radio" name="m${sleutel}" value="in" data-bind="${pre}.montage" data-rerender ${p.montage === 'in' ? 'checked' : ''}> In de dag</label>
         <label><input type="radio" name="m${sleutel}" value="op" data-bind="${pre}.montage" data-rerender ${p.montage === 'op' ? 'checked' : ''}> Op de dag</label>
       </div></div>` : ''}
-      ${t.calc === 'zon' && p.montage === 'in' ? `<label class="veld"><span>Naast elkaar in deze dag <small>(1 = gewoon)</small></span>${select(pre + '.naast', ['1', '2', '3', '4'], String(naastAantal(p)), 'data-rerender', null)}</label>` : ''}
-      ${t.calc === 'zon' && p.montage === 'in' && naastAantal(p) === 2 ? `<div class="veld"><span>Verdeling</span><div class="segment">
+      ${t.calc === 'zon' && p.montage === 'in' && !alsBestel(p) ? `<label class="veld"><span>Naast elkaar in deze dag <small>(1 = gewoon)</small></span>${select(pre + '.naast', ['1', '2', '3', '4'], String(naastAantal(p)), 'data-rerender', null)}</label>` : ''}
+      ${naastN(p) === 2 ? `<div class="veld"><span>Verdeling</span><div class="segment">
         <label><input type="radio" name="n${sleutel}" value="gelijk" data-bind="${pre}.naastIndeling" data-rerender ${p.naastIndeling !== 'ongelijk' ? 'checked' : ''}> Gelijk (naad in het midden)</label>
         <label><input type="radio" name="n${sleutel}" value="ongelijk" data-bind="${pre}.naastIndeling" data-rerender ${p.naastIndeling === 'ongelijk' ? 'checked' : ''}> Ongelijk</label>
       </div></div>` : ''}
-      ${t.calc === 'zon' && p.montage === 'in' && naastAantal(p) === 2 && p.naastIndeling === 'ongelijk' ? `<label class="veld"><span>Dagmaat linkerdeel (strak, mm) <b class="verplicht-ster">*</b> <small>linkerkant dag → naad</small></span><input data-meet data-live data-bind="${pre}.naastLinks" value="${esc(p.naastLinks || '')}" inputmode="decimal" autocomplete="off" class="${parseMaat(p.naastLinks) > 0 ? '' : 'verplicht'}"></label>` : ''}
+      ${naastN(p) === 2 && p.naastIndeling === 'ongelijk' ? `<label class="veld"><span>Dagmaat linkerdeel (strak, mm) <b class="verplicht-ster">*</b> <small>linkerkant dag → naad</small></span><input data-meet data-live data-bind="${pre}.naastLinks" value="${esc(p.naastLinks || '')}" inputmode="decimal" autocomplete="off" class="${parseMaat(p.naastLinks) > 0 ? '' : 'verplicht'}"></label>` : ''}
       <label class="veld"><span>Bevestiging</span>${select(pre + '.bevestiging', CONFIG.bevestiging, p.bevestiging)}</label>
       <label class="veld"><span>Montagehoogte (mm) <b class="verplicht-ster">*</b> <small>vloer → bevestiging</small></span><input data-meet data-live data-mh data-bind="${pre}.montagehoogte" value="${esc(p.montagehoogte || '')}" inputmode="decimal" autocomplete="off" class="${parseMaat(p.montagehoogte) > 0 ? '' : 'verplicht'}"></label>
       ${t.calc === 'zon' && naastN(p) === 1 ? `<label class="veld"><span>Bedieningszijde <b class="verplicht-ster" data-zijde-ster ${zijdeVerplicht(p) ? '' : 'hidden'}>*</b> <small>(niet op offerte)</small></span>${select(pre + '.zijde', CONFIG.zijde, p.zijde, `data-live data-zijde class="${zijdeVerplicht(p) && !p.zijde ? 'verplicht' : ''}"`)}</label>` : ''}
       ${naastN(p) > 1 ? Array.from({ length: naastN(p) }, (_, i) => `<label class="veld"><span>Bediening deel ${i + 1} (${positie(naastN(p), i)}) <b class="verplicht-ster" data-zijde-ster ${zijdeVerplicht(p) ? '' : 'hidden'}>*</b></span>${select(`${pre}.naastZijde.${i}`, CONFIG.zijde, deelZijde(p, i), `data-live data-zijde-deel="${i}" class="${zijdeVerplicht(p) && !deelZijde(p, i) ? 'verplicht' : ''}"`)}</label>`).join('') : ''}
     </div>
-    <div class="strak-blok">
-      <div class="strak-titel">GEMETEN (strak) – niet bestellen <small>mm · ${t.calc === 'zon' && p.montage === 'in' ? '3-puntsmeting aanbevolen, kleinste telt' : 'kleinste telt'}</small></div>
-      ${meetrij(t.calc === 'zon' && p.montage === 'in' && naastAantal(p) > 1 ? 'Totale dag' : lB, 'B')}${meetrij(lH, 'H')}
+    <div class="veld"><span>Ingevoerde maat is</span><div class="segment">
+        <label><input type="radio" name="ms${sleutel}" value="strak" data-bind="${pre}.maatSoort" data-rerender ${!alsBestel(p) ? 'checked' : ''}> Strak – app rekent</label>
+        <label><input type="radio" name="ms${sleutel}" value="bestel" data-bind="${pre}.maatSoort" data-rerender ${alsBestel(p) ? 'checked' : ''}> Al bestelmaat – app rekent niets</label>
+      </div></div>
+    <div class="${alsBestel(p) ? 'bestel-invoer' : 'strak-blok'}">
+      <div class="strak-titel">${alsBestel(p) ? 'INGEVOERD ALS BESTELMAAT – app rekent niets' : 'GEMETEN (strak) – niet bestellen'} <small>mm · ${!alsBestel(p) && t.calc === 'zon' && p.montage === 'in' ? '3-puntsmeting aanbevolen, kleinste telt' : 'kleinste telt'}</small></div>
+      ${meetrij(naastActief(p) ? 'Totale dag' : lB, 'B')}${meetrij(lH, 'H')}
+      <div class="live-som" data-livesom>${liveSomHTML(p)}</div>
     </div>
-    <details class="correcties"><summary>Correcties (standaard ingevuld)</summary>
+    <details class="correcties" ${alsBestel(p) ? 'hidden' : ''}><summary>Correcties (standaard ingevuld)</summary>
       <div class="raster2">${r.params.map(([key, label, e]) => `<label class="veld"><span>${label} (mm)</span><input data-par="${key}" data-live data-bind="${pre}.par.${key}" value="${esc(p.par[key] ?? '')}" placeholder="standaard ${e.std}" inputmode="decimal" class="${e.afw ? 'afwijkend' : ''}"></label>`).join('')}</div>
     </details>`;
   } else {
@@ -810,6 +822,16 @@ function kleurInfoHTML(p) {
   if (!k) return '';
   if (k.fout) return `<div class="waarschuwing">⚠ Kleurnummer ${esc(k.nr)} niet gevonden bij ${esc(p.art)}</div>`;
   return `<div class="kleur-ok">${esc(k.kwaliteit)} · <b>${esc(p.pk || k.pk)}</b>${p.pk && p.pk !== k.pk ? ` <span class="tag">handmatig (kleur = ${esc(k.pk)})</span>` : ''}${k.plisse ? ` · <b class="plisse">plissé ${esc(k.plisse)} mm</b>` : ''}</div>`;
+}
+// direct onder de meetvelden: wat de app met de ingetikte maat doet
+function liveSomHTML(p) {
+  const r = bereken(p); if (!r || r.t.calc === 'los') return '';
+  if (r.alsBestel) return r.B == null && r.H == null ? '' : `<b>Wordt zo besteld:</b> ${r.B ?? '—'} × ${r.H ?? '—'}`;
+  const regels = [];
+  if (r.naastRegels) regels.push(`Breedte: dag ${r.naast.dag} → ${r.naast.ongelijk ? `links ${r.naast.delen[0]} + rechts ${r.naast.delen[1]}` : `${r.naast.n} × ${r.naast.delen[0]}`} (speling ${r.naast.speling})`);
+  else if (r.uitB) regels.push('Breedte: ' + r.uitB);
+  if (r.uitH) regels.push('Hoogte: ' + r.uitH);
+  return regels.length ? `<b>App rekent → bestelmaat</b><br>${regels.map(esc).join('<br>')}` : '';
 }
 function resultaatHTML(p) {
   const r = bereken(p);
@@ -932,7 +954,7 @@ function renderOverzicht(k) {
       <h2 class="bijlage-titel">BIJLAGE – GEMETEN MATEN – NIET BESTELLEN</h2>
       <p class="bijlage-uitleg">Dit zijn de strakke (gemeten) maten. Bestel altijd op de bestelmaat van de ruimtebladen.</p>
       <table class="tabel grijs"><thead><tr><th>Ruimte</th><th>Raam</th><th>Product</th><th>Montage</th><th>Breedte 1 / 2 / 3</th><th>Hoogte 1 / 2 / 3</th><th>Strak</th><th>Berekening</th></tr></thead><tbody>
-      ${ruimtes.flatMap(ru => ru.ramen.flatMap(w => w.producten.map(p => [p, bereken(p)]).filter(([, r]) => r && r.t.calc !== 'los').map(([p, r]) => `<tr><td>${esc(ru.naam)}</td><td>${esc(w.nr)}</td><td>${esc(r.t.naam)}</td><td>${r.t.calc === 'zon' ? (p.montage === 'in' ? 'In' : 'Op') : ''}</td><td>${p.B.map(v => esc(v) || '–').join(' / ')}</td><td>${p.H.map(v => esc(v) || '–').join(' / ')}</td><td>${fmtStrak(r)}</td><td><small>${esc(r.uitB)}${r.uitH ? '<br>' + esc(r.uitH) : ''}</small></td></tr>`))).join('')}
+      ${ruimtes.flatMap(ru => ru.ramen.flatMap(w => w.producten.map(p => [p, bereken(p)]).filter(([, r]) => r && r.t.calc !== 'los' && !r.alsBestel).map(([p, r]) => `<tr><td>${esc(ru.naam)}</td><td>${esc(w.nr)}</td><td>${esc(r.t.naam)}</td><td>${r.t.calc === 'zon' ? (p.montage === 'in' ? 'In' : 'Op') : ''}</td><td>${p.B.map(v => esc(v) || '–').join(' / ')}</td><td>${p.H.map(v => esc(v) || '–').join(' / ')}</td><td>${fmtStrak(r)}</td><td><small>${esc(r.uitB)}${r.uitH ? '<br>' + esc(r.uitH) : ''}</small></td></tr>`))).join('')}
       </tbody></table></section>`;
   }
   html += '</div></div>';
@@ -954,10 +976,10 @@ function printRijen(p, r) {
   return `
               <tr><td><b>${esc(r.t.naam)}</b><br><small>${esc(p.cat)}</small>${p.plaatsen === 'Nee' ? '<br><small>klant plaatst zelf</small>' : ''}</td>
                 <td>${r.t.calc === 'zon' ? (p.montage === 'in' ? 'In de dag' : 'Op de dag') : ''}${p.bevestiging ? '<br><small>' + esc(p.bevestiging) + '</small>' : ''}${r.t.calc !== 'los' ? (parseMaat(p.montagehoogte) > 0 ? '<br><small>Mh ' + parseMaat(p.montagehoogte) + ' mm</small>' : '<br><small class="fout">Mh ontbreekt</small>') : ''}</td>
-                <td class="kol-bestel">${r.t.calc === 'los' ? `${esc(p.aantal)}×` : (r.naast && r.naast.delen ? (r.naast.ongelijk ? `<span class="bestel-print klein">L ${r.naast.delen[0]} × ${r.H ?? '—'}</span><br><span class="bestel-print klein">R ${r.naast.delen[1]} × ${r.H ?? '—'}</span>` : `<span class="bestel-print klein">${r.naast.n} × (${r.B} × ${r.H ?? '—'})</span>`) : `<span class="bestel-print">${fmtMaat(r)}</span>`)}${r.naast ? `<br><b>${esc(naastTekst(r))}</b>${r.naast.som ? `<br><small>samen ${r.naast.som} mm · speling ${r.naast.speling} mm</small>` : ''}<div class="dag-strak">${esc(dagStrakTekst(r))}</div>` : ''}${r.hand.B || r.hand.H ? '<br><span class="tag">handmatig: ' + esc(p.hand.reden || 'geen reden') + '</span>' : ''}${r.afwijkend.length ? '<br><small class="afw">afwijkend: ' + esc(r.afwijkend.join(', ')) + '</small>' : ''}</td>
+                <td class="kol-bestel">${r.t.calc === 'los' ? `${esc(p.aantal)}×` : (r.naast && r.naast.delen ? (r.naast.ongelijk ? `<span class="bestel-print klein">L ${r.naast.delen[0]} × ${r.H ?? '—'}</span><br><span class="bestel-print klein">R ${r.naast.delen[1]} × ${r.H ?? '—'}</span>` : `<span class="bestel-print klein">${r.naast.n} × (${r.B} × ${r.H ?? '—'})</span>`) : `<span class="bestel-print">${fmtMaat(r)}</span>`)}${r.alsBestel ? '<br><span class="tag">door inmeter als bestelmaat ingevoerd</span>' : ''}${r.naast ? `<br><b>${esc(naastTekst(r))}</b>${r.naast.som ? `<br><small>samen ${r.naast.som} mm · speling ${r.naast.speling} mm</small>` : ''}<div class="dag-strak">${esc(dagStrakTekst(r))}</div>` : ''}${r.hand.B || r.hand.H ? '<br><span class="tag">handmatig: ' + esc(p.hand.reden || 'geen reden') + '</span>' : ''}${r.afwijkend.length ? '<br><small class="afw">afwijkend: ' + esc(r.afwijkend.join(', ')) + '</small>' : ''}</td>
                 <td>${kleurLater(p) ? `<b class="kleur-later">${KLEUR_LATER}</b>` : esc(kleurTekst(p))}${effPk(p) ? '<br><small>' + esc(effPk(p)) + '</small>' : ''}</td>
                 <td><small>${esc(uitvoeringTekst(p))}${p.opmerking ? '<br><i>' + esc(p.opmerking) + '</i>' : ''}</small></td></tr>
-              ${r.t.calc !== 'los' ? `<tr class="strak-rij no-print"><td colspan="5"><button class="mini" onclick="this.parentNode.classList.toggle('open')">Toon gemeten maten</button>
+              ${r.t.calc !== 'los' && !r.alsBestel ? `<tr class="strak-rij no-print"><td colspan="5"><button class="mini" onclick="this.parentNode.classList.toggle('open')">Toon gemeten maten</button>
                 <span class="strak-detail">GEMETEN – NIET BESTELLEN: ${fmtStrak(r)} mm · ${esc(r.uitB)}${r.uitH ? ' · ' + esc(r.uitH) : ''}</span></td></tr>` : ''}`;
 }
 function samenvatting(ru) {
