@@ -1074,7 +1074,7 @@ async function sync(handmatig) {
       }
       const stempel = k.updated;
       await post({ action: 'opslaan', klant: metBerekening(k) });
-      k.syncedAt = stempel; bewaarLokaal();
+      k.syncedAt = stempel; bewaarLokaal(); veranderd = true; // lijst bijwerken (label 'niet gesynchroniseerd')
     }
     if (DB.inst.updated > DB.inst.syncedAt) {
       const stempel = DB.inst.updated;
