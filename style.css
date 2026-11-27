@@ -249,3 +249,8 @@ b.kleur-later { display: inline-block; border: 2px solid var(--rood); padding: 1
 .naast-som th { text-align: left; font-weight: normal; color: #666; padding: 2px 14px 2px 0; white-space: nowrap; }
 .naast-som td { padding: 2px 0; }
 .naast-som tr.nadruk td { font-weight: bold; }
+.delen { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.deel { flex: 1 1 200px; border: 2px solid var(--beige); border-radius: 6px; padding: 6px 10px; background: #fff; }
+.deel .bestel-maat { font-size: 26px; }
+.deel-tag { font-size: 9pt; }
+tr.deel-rij td { border-bottom: 1px dotted #ccc; }
