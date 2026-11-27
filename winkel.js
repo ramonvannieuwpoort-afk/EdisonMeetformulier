@@ -11,6 +11,7 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const datumNL = d => { if (!d || !/^\d{4}-\d\d-\d\d/.test(d)) return d || ''; const [y, m, dd] = d.slice(0, 10).split('-'); return `${dd}-${m}-${y}`; };
 const app = () => $('#app');
+const VERSIE = (typeof CONFIG !== 'undefined' && CONFIG.versie) || '?';
 const W = (() => { try { return JSON.parse(localStorage.getItem('emf_winkel') || '{}'); } catch (e) { return {}; } })();
 const bewaar = () => localStorage.setItem('emf_winkel', JSON.stringify(W));
 let KLANTEN = [], filter = 'gevraagd', laden = false;
@@ -40,7 +41,7 @@ function melding(tekst, fout) {
   m.innerHTML = esc(tekst); m.className = 'no-print toon' + (fout ? ' fout' : '');
   clearTimeout(m._t); m._t = setTimeout(() => m.className = 'no-print', 5000);
 }
-const kop = (titel, terug) => `<header class="kop no-print">${terug ? `<a class="terug" href="${terug}">‹</a>` : '<span class="terug-leeg"></span>'}<img src="logo.png" alt="Edison Interieur" class="kop-logo"><span class="kop-titel">${esc(titel)}</span><span class="badge grijs">Winkel</span></header>`;
+const kop = (titel, terug) => `<header class="kop no-print">${terug ? `<a class="terug" href="${terug}">‹</a>` : '<span class="terug-leeg"></span>'}<img src="logo.png" alt="Edison Interieur" class="kop-logo"><span class="kop-titel">${esc(titel)}</span><span class="badge grijs">Winkel · v${esc(VERSIE)}</span></header>`;
 
 const METING = { klaargezet: 'klaargezet – nog te meten', nieuw: 'nog te meten', bezig: 'bezig met meten', afgerond: '✓ ingemeten' };
 function offerteLabel(k) {
@@ -93,6 +94,7 @@ function renderLijst() {
     <ul class="lijst" id="wlijst">${lijst.map(k => `<li class="${gevraagd(k) ? 'nieuw-winkel' : ''}" data-zoek="${esc((k.naam + ' ' + k.adres + ' ' + k.pcplaats + ' ' + k.offertenr).toLowerCase())}"><a href="#k/${k.id}">
       <strong>${esc(k.naam || '(geen naam)')}</strong><span>${esc(k.adres)} ${esc(k.pcplaats)}</span>
       <small>${k.datum ? datumNL(k.datum) + " · " : ""}<em class="st-${k.meting}">${METING[k.meting] || ''}</em>${offerteLabel(k) ? ' · ' + offerteLabel(k) : ''}</small></a></li>`).join('') || `<li class="leeg">${laden ? 'Laden…' : 'Niets in deze lijst.'}</li>`}</ul>
+    <p class="uitleg versie-voet">Versie ${esc(VERSIE)} · nieuwe versie? Vernieuw de pagina (Cmd+R / Ctrl+R).</p>
   </main>`;
 }
 
