@@ -17,7 +17,28 @@ const kopie = o => JSON.parse(JSON.stringify(o));
 function laad(key, fallback) { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch (e) { return fallback; } }
 
 /* ---------- opslag ---------- */
-const DB = { klanten: laad('emf_klanten', {}), inst: laad('emf_inst', null) };
+// v3.1: elke klant onder een eigen sleutel (emf_k_<id>), zodat bij typen alleen die ene klant wordt weggeschreven
+let PER_KLANT = true;
+function laadKlanten() {
+  const k = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const sl = localStorage.key(i);
+    if (sl && sl.startsWith('emf_k_')) { try { const v = JSON.parse(localStorage.getItem(sl)); if (v && v.id) k[v.id] = v; } catch (e) {} }
+  }
+  const oud = laad('emf_klanten', null);
+  if (oud) { // eenmalig omzetten vanuit de oude opslag (alles onder één sleutel)
+    let ok = true;
+    Object.values(oud).forEach(x => {
+      if (!x || !x.id) return;
+      if (!k[x.id] || (k[x.id].updated || 0) < (x.updated || 0)) k[x.id] = x;
+      try { localStorage.setItem('emf_k_' + x.id, JSON.stringify(k[x.id])); } catch (e) { ok = false; }
+    });
+    if (ok) localStorage.removeItem('emf_klanten');
+    else { PER_KLANT = false; Object.keys(k).forEach(id => { try { localStorage.removeItem('emf_k_' + id); } catch (e) {} }); }
+  }
+  return k;
+}
+const DB = { klanten: laadKlanten(), inst: laad('emf_inst', null) };
 if (!DB.inst) DB.inst = { waarden: { ...CONFIG.standaard }, aftrekPerType: kopie(CONFIG.aftrekPerType), url: '', sleutel: '', updated: 0, syncedAt: 0, laatstePull: 0 };
 for (const [k, v] of Object.entries(CONFIG.standaard)) if (DB.inst.waarden[k] === undefined) DB.inst.waarden[k] = v;
 for (const [k, v] of Object.entries(CONFIG.aftrekPerType)) if (DB.inst.aftrekPerType[k] === undefined) DB.inst.aftrekPerType[k] = v;
@@ -26,14 +47,21 @@ let CAT = laad('emf_cat', null) || CATALOGUS_STANDAARD;
 
 // v2.5: elke meting gaat kant-en-klaar voor Excel mee naar de Sheet.
 // Eenmalig alles opnieuw versturen, zodat ook oude metingen in Excel op te halen zijn.
-if (DB.inst.excelV !== 1) { Object.values(DB.klanten).forEach(k => { k.syncedAt = 0; }); DB.inst.excelV = 1; try { localStorage.setItem('emf_klanten', JSON.stringify(DB.klanten)); localStorage.setItem('emf_inst', JSON.stringify(DB.inst)); } catch (e) {} }
+if (DB.inst.excelV !== 1) { Object.values(DB.klanten).forEach(k => { k.syncedAt = 0; }); DB.inst.excelV = 1; bewaarLokaal(); }
 
-function bewaarLokaal() {
-  try { localStorage.setItem('emf_klanten', JSON.stringify(DB.klanten)); localStorage.setItem('emf_inst', JSON.stringify(DB.inst)); }
-  catch (e) { melding('Opslaan op dit toestel mislukt: ' + e.message, true); }
+// bewaarLokaal(k) = alleen die klant, bewaarLokaal([..]) = alleen die klanten ([] = alleen instellingen), bewaarLokaal() = alles
+function bewaarLokaal(welke) {
+  try {
+    if (!PER_KLANT) localStorage.setItem('emf_klanten', JSON.stringify(DB.klanten));
+    else {
+      const lijst = welke == null ? Object.values(DB.klanten) : Array.isArray(welke) ? welke : [welke];
+      lijst.forEach(k => { if (k && k.id) localStorage.setItem('emf_k_' + k.id, JSON.stringify(k)); });
+    }
+    localStorage.setItem('emf_inst', JSON.stringify(DB.inst));
+  } catch (e) { melding('Opslaan op dit toestel mislukt: ' + e.message, true); }
 }
-function gewijzigd(k) { k.updated = Date.now(); bewaarLokaal(); planSync(); updateBadge(); snapPeriodiek(k); }
-function instGewijzigd() { DB.inst.updated = Date.now(); bewaarLokaal(); planSync(); updateBadge(); }
+function gewijzigd(k) { k.updated = Date.now(); bewaarLokaal(k); planSync(); updateBadge(); snapPeriodiek(k); }
+function instGewijzigd() { DB.inst.updated = Date.now(); bewaarLokaal([]); planSync(); updateBadge(); }
 
 const fotoDB = (() => {
   let dbp;
@@ -354,7 +382,7 @@ document.addEventListener('input', e => {
     let v = el.type === 'checkbox' ? el.checked : el.value;
     if (el.dataset.num !== undefined && v !== '') v = Number(String(v).replace(',', '.'));
     zetPad(DB.inst, el.dataset.ibind, v);
-    if (el.dataset.lokaal !== undefined) bewaarLokaal(); else instGewijzigd();
+    if (el.dataset.lokaal !== undefined) bewaarLokaal([]); else instGewijzigd();
   }
 });
 document.addEventListener('focusin', e => { const el = e.target; if (el.dataset && el.dataset.bind) el.dataset.oud = el.value; });
@@ -635,7 +663,7 @@ document.addEventListener('change', e => {
 function offerteGewijzigd(k) {
   const schoon = k.afgerond && k.updated - k.afgerond <= 3000;
   k.updated = Date.now(); if (schoon) k.afgerond = k.updated;
-  bewaarLokaal(); planSync(); updateBadge();
+  bewaarLokaal(k); planSync(); updateBadge();
 }
 function controleer(k) {
   const fout = [], aandacht = [];
@@ -690,7 +718,7 @@ function renderAfronden(k) {
 }
 function rondAf(nFout) {
   if (nFout && !confirm(`Er staan nog ${nFout} punten open. Toch afronden?`)) return;
-  const k = huidigeKlant; k.afgerond = Date.now(); gewijzigd(k); k.afgerond = k.updated; bewaarLokaal();
+  const k = huidigeKlant; k.afgerond = Date.now(); gewijzigd(k); k.afgerond = k.updated; bewaarLokaal(k);
   melding('Meting afgerond.'); location.hash = '#/k/' + k.id;
 }
 
@@ -1134,6 +1162,7 @@ function renderInst() {
       <label class="veld"><span>Web-app-URL (Apps Script)</span><input data-ibind="url" data-lokaal value="${esc(DB.inst.url)}" placeholder="https://script.google.com/macros/s/…/exec"></label>
       <label class="veld"><span>Sleutel</span><input data-ibind="sleutel" data-lokaal value="${esc(DB.inst.sleutel)}" autocomplete="off"></label>
       <div class="acties"><button class="knop primair" onclick="testVerbinding()">Test verbinding</button><button class="knop" onclick="sync(true)">Nu synchroniseren</button></div>
+      ${DB.inst.laatsteSync ? `<p class="uitleg">Laatste sync: <b>${(DB.inst.laatsteSync.ms / 1000).toFixed(1).replace('.', ',')} s</b> · ${DB.inst.laatsteSync.verstuurd} verstuurd · ${DB.inst.laatsteSync.niets ? 'niets nieuws' : DB.inst.laatsteSync.opgehaald + ' opgehaald'}${DB.inst.laatsteSync.fotos ? ' · ' + DB.inst.laatsteSync.fotos + " foto's" : ''} · ${tijdNL(DB.inst.laatsteSync.t)}</p>` : ''}
     </section>
     <section class="kaart">
       <h2>Winkel-toegang</h2>
@@ -1169,7 +1198,7 @@ async function maakWinkelToegang() {
 }
 function zorgType(id) { if (!DB.inst.aftrekPerType[id]) DB.inst.aftrekPerType[id] = { B: '', H: '' }; }
 async function testVerbinding() {
-  try { const j = await post({ action: 'test' }); melding('Verbinding werkt: ' + (j.bericht || 'ok') + '. Metingen worden opgehaald…'); DB.inst.laatstePull = 0; bewaarLokaal(); sync(); }
+  try { const j = await post({ action: 'test' }); melding('Verbinding werkt: ' + (j.bericht || 'ok') + '. Metingen worden opgehaald…'); DB.inst.laatstePull = 0; bewaarLokaal([]); sync(); }
   catch (e) { melding('Verbinding mislukt: ' + e.message, true); }
 }
 async function haalCatalogus(stil) {
@@ -1237,8 +1266,13 @@ function renderLeeg() {
 const histDB = (() => {
   let dbp;
   const open = () => dbp || (dbp = new Promise((res, rej) => {
-    const r = indexedDB.open('emf-historie', 1);
-    r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('snaps', { keyPath: 'id' }).createIndex('klant', 'klant'); d.createObjectStore('log', { keyPath: 'id' }).createIndex('klant', 'klant'); };
+    const r = indexedDB.open('emf-historie', 2);
+    r.onupgradeneeded = ev => {
+      const d = r.result, t = r.transaction;
+      if (ev.oldVersion < 1) { d.createObjectStore('snaps', { keyPath: 'id' }).createIndex('klant', 'klant'); d.createObjectStore('log', { keyPath: 'id' }).createIndex('klant', 'klant'); }
+      // v2: index op 'sent', zodat de wachtrij zonder alles door te lezen te vinden is
+      ['snaps', 'log'].forEach(n => { const st = t.objectStore(n); if (!st.indexNames.contains('sent')) st.createIndex('sent', 'sent'); });
+    };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   }));
   const tx = async (store, mode, fn) => { const d = await open(); return new Promise((res, rej) => { const t = d.transaction(store, mode); const req = fn(t.objectStore(store)); t.oncomplete = () => res(req && req.result); t.onerror = () => rej(t.error); }); };
@@ -1248,7 +1282,8 @@ const histDB = (() => {
     vanKlant: (s, id) => tx(s, 'readonly', st => st.index('klant').getAll(id)),
     alle: s => tx(s, 'readonly', st => st.getAll()),
     get: (s, id) => tx(s, 'readonly', st => st.get(id)),
-    del: (s, id) => tx(s, 'readwrite', st => st.delete(id))
+    del: (s, id) => tx(s, 'readwrite', st => st.delete(id)),
+    wachtrij: (s, max) => tx(s, 'readonly', st => st.index('sent').getAll(IDBKeyRange.only(0), max))
   };
 })();
 const SNAP_INTERVAL = 10 * 60 * 1000, BEWAAR_ALLES = 30 * 864e5;
@@ -1311,7 +1346,7 @@ function maakOngedaan(e) {
   if (DB.klanten[k.id]) snapshot(DB.klanten[k.id], 'voor ongedaan maken');
   k.updated = Date.now(); DB.klanten[k.id] = k;
   if (huidigeKlant && huidigeKlant.id === k.id) huidigeKlant = k;
-  bewaarLokaal(); planSync(); updateBadge();
+  bewaarLokaal(k); planSync(); updateBadge();
   const m = $('#melding'); if (m) m.className = 'no-print';
   if (location.hash === '#/' && !k.verwijderd) location.hash = '#/k/' + k.id; else route();
   melding('Ongedaan gemaakt.');
@@ -1319,11 +1354,20 @@ function maakOngedaan(e) {
 
 // naar de Sheet (werkt ook als het Apps Script nog niet bijgewerkt is: dan blijft het op het toestel)
 let historieFout = '';
+// wat er nog naar de Sheet moet (via de index, niet alles doorlezen)
+async function historieWachtrij() {
+  try { return { snaps: await histDB.wachtrij('snaps', 5), logs: await histDB.wachtrij('log', 300) }; }
+  catch (e) { return { snaps: [], logs: [] }; }
+}
+async function markeerHistorieVerstuurd(w) {
+  w.snaps.forEach(x => { x.sent = 1; }); w.logs.forEach(x => { x.sent = 1; });
+  if (w.snaps.length) await histDB.putAlle('snaps', w.snaps);
+  if (w.logs.length) await histDB.putAlle('log', w.logs);
+}
 async function syncHistorie() {
   try {
     for (let ronde = 0; ronde < 5; ronde++) {
-      const snaps = (await histDB.alle('snaps')).filter(x => !x.sent).slice(0, 5);
-      const logs = (await histDB.alle('log')).filter(x => !x.sent).slice(0, 300);
+      const { snaps, logs } = await historieWachtrij();
       if (!snaps.length && !logs.length) break;
       await post({ action: 'historie', snaps: snaps.map(({ sent, vgl, ...x }) => x), logs: logs.map(({ sent, ...x }) => x) });
       snaps.forEach(x => { x.sent = 1; }); logs.forEach(x => { x.sent = 1; });
@@ -1393,7 +1437,7 @@ async function zetSnapTerug(id) {
     if (!confirm(`Meting terugzetten naar de versie van ${tijdNL(s.t)}?\n\nDe huidige versie wordt eerst bewaard, dus je kunt altijd terug.`)) return;
     await snapshot(k, 'voor terugzetten');
     const n = JSON.parse(s.json); n.id = k.id; n.updated = Date.now(); n.syncedAt = 0; n.verwijderd = false;
-    DB.klanten[k.id] = n; huidigeKlant = n; bewaarLokaal(); planSync(); updateBadge();
+    DB.klanten[k.id] = n; huidigeKlant = n; bewaarLokaal(n); planSync(); updateBadge();
     melding(`Teruggezet naar de versie van ${tijdNL(s.t)}.`);
     location.hash = '#/k/' + k.id;
   } catch (e) { melding('Terugzetten mislukt: ' + e.message, true); }
@@ -1433,7 +1477,101 @@ function updateBadge() {
   else { t = '✓ Gesynchroniseerd'; c = 'groen'; }
   b.textContent = t; b.className = 'badge ' + c; b.title = syncFout || '';
 }
+// verwerkt wat de server terugstuurt (klanten van andere toestellen, winkel, instellingen)
+function verwerkOphalen(j, geraakt) {
+  let veranderd = false;
+  for (const r of j.klanten || []) {
+    const lok = DB.klanten[r.id];
+    if (!lok || (r.updated > lok.updated && lok.updated <= lok.syncedAt)) { if (lok) snapshot(lok, 'voor bijwerken vanaf ander toestel'); const k = JSON.parse(r.json); delete k.excel; delete k.printbon; k.syncedAt = k.updated; DB.klanten[k.id] = k; geraakt.add(k); veranderd = true; }
+  }
+  for (const o of j.opdrachten || []) {
+    if (DB.klanten[o.id]) continue;
+    const k = nieuweKlant(); Object.assign(k, { id: o.id, naam: o.naam || '', adres: o.adres || '', pcplaats: o.pcplaats || '', telefoon: o.telefoon || '', email: o.email || '', bron: 'winkel', wens: o.wens || '', aangenomenDoor: o.door || '', gewensteDatum: o.datum || '', datum: o.datum || vandaag() });
+    DB.klanten[k.id] = k; geraakt.add(k); veranderd = true;
+  }
+  for (const st of j.winkelVerwijderd || []) {
+    const k = DB.klanten[st.id]; if (!k || k.verwijderd || k.afgerond) continue;
+    if (k.ruimtes.some(r => r.ramen.some(w => w.producten.some(p => prodDef(p))))) continue;
+    snapshot(k, 'voor verwijderen door winkel'); k.verwijderd = true; k.updated = Date.now(); geraakt.add(k); veranderd = true;
+  }
+  for (const st of j.winkelStatus || []) {
+    const k = DB.klanten[st.id]; if (!k) continue;
+    const o = k.offerte || {};
+    if ((o.t || 0) < st.t) { k.offerte = { ...o, keuze: 'gemaakt', nr: st.nr || o.nr || '', datum: st.datum || vandaag(), door: 'winkel', wie: st.wie || '', t: st.t }; if (st.nr && !k.offertenr) k.offertenr = st.nr; const schoon = k.afgerond && k.updated - k.afgerond <= 3000; k.updated = Date.now(); if (schoon) k.afgerond = k.updated; geraakt.add(k); veranderd = true; }
+  }
+  const si = j.instellingen;
+  if (si && si.updated > DB.inst.updated && DB.inst.updated <= DB.inst.syncedAt) {
+    DB.inst.waarden = { ...CONFIG.standaard, ...si.waarden }; DB.inst.aftrekPerType = si.aftrekPerType || {}; DB.inst.updated = DB.inst.syncedAt = si.updated; veranderd = true;
+  }
+  return veranderd;
+}
+// foto's na de maten: per ronde een paar, zodat maten nooit op foto's hoeven te wachten
+async function uploadFotos(max) {
+  let n = 0;
+  for (const k of Object.values(DB.klanten)) {
+    for (const f of alleFotos(k)) {
+      if (n >= max) return n;
+      if (f.driveId) continue;
+      const rec = await fotoDB.get(f.id).catch(() => null); if (!rec) continue;
+      const j = await post({ action: 'foto', klantId: k.id, klantNaam: k.naam, fotoId: f.id, dataUrl: rec.data });
+      f.driveId = j.driveId; offerteGewijzigd(k); n++; // telt niet als 'meting gewijzigd'
+    }
+  }
+  return n;
+}
+let syncVersie = 2; // 2 = alles in één verzoek; 1 = oude server, losse verzoeken
 async function sync(handmatig) {
+  if (syncBezig) return;
+  if (!DB.inst.url || !DB.inst.sleutel) { if (handmatig) location.hash = '#/instellingen'; return; }
+  if (!navigator.onLine) { updateBadge(); if (handmatig) melding('Geen verbinding. Wordt later verstuurd.'); return; }
+  if (syncVersie === 1) return syncLos(handmatig);
+  syncBezig = true; updateBadge();
+  const start = Date.now(), geraakt = new Set();
+  let veranderd = false, verstuurd = 0, opgehaald = 0, fotos = 0;
+  try {
+    // 1. versturen + ophalen in één verzoek
+    const klanten = Object.values(DB.klanten).filter(k => k.updated > k.syncedAt).slice(0, 15);
+    const stempels = new Map(klanten.map(k => [k.id, k.updated]));
+    const instStempel = DB.inst.updated > DB.inst.syncedAt ? DB.inst.updated : 0;
+    const hist = await historieWachtrij();
+    // versies die dit toestel in de laatste minuten zelf verstuurde: die hoeft de server niet terug te sturen
+    const bekend = {}; Object.values(DB.klanten).forEach(k => { if (k.syncedAt && k.syncedAt === k.updated && Date.now() - k.updated < 10 * 60000) bekend[k.id] = k.updated; });
+    const verzoek = { action: 'sync', sinds: DB.inst.laatstePull || 0, klanten: klanten.map(metBerekening), bekend };
+    if (instStempel) verzoek.inst = { waarden: DB.inst.waarden, aftrekPerType: DB.inst.aftrekPerType, updated: instStempel };
+    if (hist.snaps.length || hist.logs.length) verzoek.historie = { snaps: hist.snaps.map(({ sent, vgl, ...x }) => x), logs: hist.logs.map(({ sent, ...x }) => x) };
+    let j;
+    try { j = await post(verzoek); }
+    catch (e) { if (/Onbekende actie/.test(e.message)) { syncVersie = 1; syncBezig = false; return syncLos(handmatig); } throw e; }
+    const ok = new Set(j.opgeslagen || []);
+    for (const k of klanten) if (ok.has(k.id)) { k.syncedAt = stempels.get(k.id); geraakt.add(k); veranderd = true; verstuurd++; }
+    if (instStempel) DB.inst.syncedAt = instStempel;
+    if (verzoek.historie) await markeerHistorieVerstuurd(hist);
+    if (!j.niets) { opgehaald = (j.klanten || []).length + (j.opdrachten || []).length; if (verwerkOphalen(j, geraakt)) veranderd = true; }
+    DB.inst.laatstePull = j.serverTijd || Date.now();
+    bewaarLokaal([...geraakt]);
+    // 2. foto's (na de maten)
+    fotos = await uploadFotos(3);
+    // 3. nieuwe prijslijst via macro StuurCatalogus? Dan vanzelf ophalen.
+    const ct = Number(j.catalogusTijd) || 0;
+    if (ct && ct > (Number(localStorage.getItem('emf_cat_tijd')) || 0)) {
+      if (await haalCatalogus(true)) localStorage.setItem('emf_cat_tijd', String(ct));
+    }
+    syncFout = '';
+    DB.inst.laatsteSync = { ms: Date.now() - start, t: Date.now(), verstuurd, opgehaald, fotos, niets: !!j.niets };
+    bewaarLokaal([]);
+    if (handmatig) melding('Gesynchroniseerd.');
+    // nog meer te doen (meer dan 15 klanten, foto's, of gewijzigd tijdens het versturen)? Snel nog een ronde.
+    if (aantalOpen() || fotos >= 3) { clearTimeout(syncTimer); syncTimer = setTimeout(() => sync(), 1000); }
+  } catch (e) {
+    syncFout = e.message; if (handmatig) melding('Synchroniseren mislukt: ' + e.message, true);
+  } finally {
+    syncBezig = false; updateBadge();
+    const bezig = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+    if (veranderd && !bezig && !huidigeKlant) route();
+  }
+}
+// terugval voor een server zonder 'sync' (oude Apps Script)
+async function syncLos(handmatig) {
   if (syncBezig) return;
   if (!DB.inst.url || !DB.inst.sleutel) { if (handmatig) location.hash = '#/instellingen'; return; }
   if (!navigator.onLine) { updateBadge(); if (handmatig) melding('Geen verbinding. Wordt later verstuurd.'); return; }
@@ -1504,7 +1642,7 @@ async function sync(handmatig) {
 window.addEventListener('online', () => sync());
 window.addEventListener('offline', updateBadge);
 // elke minuut versturen én nieuwe metingen van andere toestellen ophalen
-setInterval(() => sync(), 60000);
+setInterval(() => { if (document.visibilityState === 'visible') sync(); }, 60000);
 // bij terugkeren naar de app (iPhone: app weer openen, laptop: tabblad weer actief)
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') sync(); });
 
